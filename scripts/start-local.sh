@@ -66,12 +66,19 @@ if ! psql -lqt | cut -d \| -f 1 | grep -qw tactech; then
   createdb -O tactech tactech
 fi
 
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "Installing Python 3.12 (3.14 cannot install this project)..."
+  brew install python@3.12
+  export PATH="/opt/homebrew/opt/python@3.12/bin:/usr/local/opt/python@3.12/bin:$PATH"
+fi
+
+if [ -d .venv ] && ! .venv/bin/python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' >/dev/null 2>&1; then
+  echo "Removing incompatible virtualenv..."
+  rm -rf .venv
+fi
+
 if [ ! -d .venv ]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    python3.12 -m venv .venv
-  else
-    python3 -m venv .venv
-  fi
+  python3.12 -m venv .venv
 fi
 
 .venv/bin/pip install -q -r requirements.txt
