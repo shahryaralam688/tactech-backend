@@ -39,6 +39,73 @@ EXERCISES = [
 ]
 
 
+def weekly_strength_plan() -> models.WorkoutPlan:
+    return models.WorkoutPlan(
+        id="plan-strength-block",
+        trainer_id="trainer-maya",
+        title="4-day strength block",
+        focus="Hypertrophy · posterior chain",
+        duration_minutes=55,
+        level="Intermediate",
+        days_per_week=4,
+        notes="Eat before evening sessions.",
+        exercises=[
+            models.WorkoutExercise(
+                id="we-block-flat-1",
+                exercise_id="ex-squat",
+                sets=4,
+                reps=5,
+                rest_seconds=150,
+                recommended_weight_kg=70,
+                sort_order=0,
+            )
+        ],
+        days=[
+            models.PlanDay(
+                id="day-block-tue",
+                weekday="tuesday",
+                start_time="07:30",
+                title="Lower strength",
+                focus="Squat pattern",
+                duration_minutes=55,
+                location="Gym",
+                warmup="5 min bike + empty bar",
+                cooldown="Walk 3 min, stretch",
+                coach_notes="No failed reps. Stop at RPE 8.",
+                sort_order=0,
+                exercises=[
+                    models.PlanExercise(
+                        id="pe-block-squat",
+                        exercise_id="ex-squat",
+                        sort_order=0,
+                        sets=4,
+                        reps=5,
+                        rest_seconds=150,
+                        recommended_weight_kg=70,
+                        tempo="3-1-1-0",
+                        rpe=7.5,
+                        notes="Brace, sit between the hips, full depth.",
+                        side="Both",
+                        prescribed_sets=[
+                            models.PlanPrescribedSet(id="ps-block-1", set_number=1, reps=5, weight_kg=60, rpe=6),
+                            models.PlanPrescribedSet(id="ps-block-2", set_number=2, reps=5, weight_kg=70, rpe=7.5),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def ensure_weekly_sample(db) -> bool:
+    existing = db.get(models.WorkoutPlan, "plan-strength-block")
+    if existing:
+        return False
+    db.add(weekly_strength_plan())
+    db.flush()
+    return True
+
+
 def seed() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -47,7 +114,11 @@ def seed() -> None:
     try:
         existing = db.execute(select(models.User).where(models.User.id == "user-trainer-maya")).scalar_one_or_none()
         if existing:
-            log.info("seed_skipped", reason="demo trainer already exists")
+            if ensure_weekly_sample(db):
+                db.commit()
+                log.info("seed_weekly_plan_added", plan_id="plan-strength-block")
+            else:
+                log.info("seed_skipped", reason="demo trainer already exists")
             return
 
         now = datetime.now(timezone.utc)
@@ -162,6 +233,7 @@ def seed() -> None:
                         we("we-restore-3", "ex-plank", 3, 30, 30, None, 2),
                     ],
                 ),
+                weekly_strength_plan(),
             ]
         )
         db.flush()

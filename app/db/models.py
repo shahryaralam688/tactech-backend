@@ -91,12 +91,18 @@ class WorkoutPlan(Base):
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     level: Mapped[str] = mapped_column(String(32), nullable=False)
     days_per_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     trainer: Mapped[TrainerProfile] = relationship(back_populates="plans")
     exercises: Mapped[list["WorkoutExercise"]] = relationship(
         back_populates="plan",
         cascade="all, delete-orphan",
         order_by="WorkoutExercise.sort_order",
+    )
+    days: Mapped[list["PlanDay"]] = relationship(
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        order_by="PlanDay.sort_order",
     )
     assignments: Mapped[list["PlanAssignment"]] = relationship(back_populates="plan")
 
@@ -115,6 +121,67 @@ class WorkoutExercise(Base):
 
     plan: Mapped[WorkoutPlan] = relationship(back_populates="exercises")
     exercise: Mapped[Exercise] = relationship()
+
+
+class PlanDay(Base):
+    __tablename__ = "plan_days"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("workout_plans.id", ondelete="CASCADE"), index=True)
+    weekday: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_time: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    focus: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    warmup: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cooldown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coach_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    plan: Mapped[WorkoutPlan] = relationship(back_populates="days")
+    exercises: Mapped[list["PlanExercise"]] = relationship(
+        back_populates="day",
+        cascade="all, delete-orphan",
+        order_by="PlanExercise.sort_order",
+    )
+
+
+class PlanExercise(Base):
+    __tablename__ = "plan_exercises"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_day_id: Mapped[str] = mapped_column(ForeignKey("plan_days.id", ondelete="CASCADE"), index=True)
+    exercise_id: Mapped[str] = mapped_column(ForeignKey("exercises.id", ondelete="RESTRICT"))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sets: Mapped[int] = mapped_column(Integer, nullable=False)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False)
+    rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    recommended_weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tempo: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rpe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    side: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    day: Mapped[PlanDay] = relationship(back_populates="exercises")
+    prescribed_sets: Mapped[list["PlanPrescribedSet"]] = relationship(
+        back_populates="plan_exercise",
+        cascade="all, delete-orphan",
+        order_by="PlanPrescribedSet.set_number",
+    )
+
+
+class PlanPrescribedSet(Base):
+    __tablename__ = "plan_prescribed_sets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_exercise_id: Mapped[str] = mapped_column(ForeignKey("plan_exercises.id", ondelete="CASCADE"), index=True)
+    set_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rpe: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    plan_exercise: Mapped[PlanExercise] = relationship(back_populates="prescribed_sets")
 
 
 class PlanAssignment(Base):

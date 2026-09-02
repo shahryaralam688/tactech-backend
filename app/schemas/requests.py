@@ -1,9 +1,20 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import EmailStr, Field
+from pydantic import ConfigDict, EmailStr, Field
+from pydantic.alias_generators import to_camel
 
 from app.schemas.common import APIModel, MacroEstimateOut
+
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+class RequestModel(APIModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="ignore",
+    )
 
 
 class SignupRequest(APIModel):
@@ -31,7 +42,7 @@ class LinkTrainerRequest(APIModel):
     invite_code: str
 
 
-class WorkoutExerciseIn(APIModel):
+class WorkoutExerciseIn(RequestModel):
     id: str | None = None
     exercise_id: str
     sets: int = Field(ge=1)
@@ -40,13 +51,51 @@ class WorkoutExerciseIn(APIModel):
     recommended_weight_kg: float | None = None
 
 
-class CreatePlanRequest(APIModel):
+class PrescribedSetIn(RequestModel):
+    id: str | None = None
+    set_number: int = Field(ge=1)
+    reps: int = Field(ge=0)
+    weight_kg: float | None = None
+    rpe: float | None = None
+
+
+class PlanDayExerciseIn(RequestModel):
+    id: str | None = None
+    exercise_id: str
+    sets: int = Field(ge=1)
+    reps: int = Field(ge=1)
+    rest_seconds: int = Field(ge=0)
+    recommended_weight_kg: float | None = None
+    tempo: str | None = None
+    rpe: float | None = None
+    notes: str | None = None
+    side: str | None = None
+    prescribed_sets: list[PrescribedSetIn] = Field(default_factory=list)
+
+
+class PlanDayIn(RequestModel):
+    id: str | None = None
+    weekday: str
+    start_time: str | None = None
+    title: str = ""
+    focus: str = ""
+    duration_minutes: int = Field(default=0, ge=0)
+    location: str | None = None
+    warmup: str | None = None
+    cooldown: str | None = None
+    coach_notes: str | None = None
+    exercises: list[PlanDayExerciseIn] = Field(default_factory=list)
+
+
+class CreatePlanRequest(RequestModel):
     title: str
     focus: str
     duration_minutes: int = Field(ge=1)
     level: str
     days_per_week: int = Field(ge=1, le=7)
-    exercises: list[WorkoutExerciseIn]
+    notes: str | None = None
+    exercises: list[WorkoutExerciseIn] = Field(default_factory=list)
+    days: list[PlanDayIn] = Field(default_factory=list)
 
 
 class AssignPlanRequest(APIModel):

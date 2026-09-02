@@ -11,7 +11,13 @@ class AssignmentRepository:
     def get_for_trainee(self, trainee_id: str) -> models.PlanAssignment | None:
         stmt = (
             select(models.PlanAssignment)
-            .options(joinedload(models.PlanAssignment.plan).joinedload(models.WorkoutPlan.exercises))
+            .options(
+                joinedload(models.PlanAssignment.plan).joinedload(models.WorkoutPlan.exercises),
+                joinedload(models.PlanAssignment.plan)
+                .joinedload(models.WorkoutPlan.days)
+                .joinedload(models.PlanDay.exercises)
+                .joinedload(models.PlanExercise.prescribed_sets),
+            )
             .where(models.PlanAssignment.trainee_id == trainee_id)
         )
         return self.db.execute(stmt).unique().scalar_one_or_none()

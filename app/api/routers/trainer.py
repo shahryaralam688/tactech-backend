@@ -109,6 +109,16 @@ def get_plan(
     return service.get_plan(principal.trainer_id, plan_id)  # type: ignore[arg-type]
 
 
+@router.patch("/plans/{plan_id}", response_model=WorkoutPlanOut)
+def update_plan(
+    plan_id: str,
+    payload: CreatePlanRequest,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> WorkoutPlanOut:
+    return service.update_plan(principal.trainer_id, plan_id, payload)  # type: ignore[arg-type]
+
+
 @router.post("/assignments", response_model=AssignmentResponse, status_code=status.HTTP_201_CREATED)
 def assign_plan(
     payload: AssignPlanRequest,

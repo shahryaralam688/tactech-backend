@@ -6,6 +6,9 @@ from app.schemas.common import (
     MacroEstimateOut,
     MealOut,
     PlanAssignmentOut,
+    PlanDayExerciseOut,
+    PlanDayOut,
+    PrescribedSetOut,
     TrainerFeedbackOut,
     TrainerProfileOut,
     TraineeProfileOut,
@@ -15,6 +18,16 @@ from app.schemas.common import (
     WorkoutPlanOut,
     WorkoutSetLogOut,
 )
+
+WEEKDAY_ORDER = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
 
 
 def user_public(user: models.User) -> UserPublic:
@@ -39,16 +52,49 @@ def exercise_out(exercise: models.Exercise) -> ExerciseOut:
     return ExerciseOut.model_validate(exercise)
 
 
+def _day_exercise_out(item: models.PlanExercise) -> PlanDayExerciseOut:
+    return PlanDayExerciseOut(
+        id=item.id,
+        exercise_id=item.exercise_id,
+        sets=item.sets,
+        reps=item.reps,
+        rest_seconds=item.rest_seconds,
+        recommended_weight_kg=item.recommended_weight_kg,
+        tempo=item.tempo,
+        rpe=item.rpe,
+        notes=item.notes,
+        side=item.side,
+        prescribed_sets=[
+            PrescribedSetOut(
+                id=row.id,
+                set_number=row.set_number,
+                reps=row.reps,
+                weight_kg=row.weight_kg,
+                rpe=row.rpe,
+            )
+            for row in sorted(item.prescribed_sets, key=lambda s: s.set_number)
+        ],
+    )
+
+
 def plan_out(plan: models.WorkoutPlan) -> WorkoutPlanOut:
-    return WorkoutPlanOut(
-        id=plan.id,
-        trainer_id=plan.trainer_id,
-        title=plan.title,
-        focus=plan.focus,
-        duration_minutes=plan.duration_minutes,
-        level=plan.level,
-        days_per_week=plan.days_per_week,
-        exercises=[
+    days = sorted(
+        plan.days,
+        key=lambda day: (day.sort_order, WEEKDAY_ORDER.get(day.weekday, 99)),
+    )
+    flat = [
+        WorkoutExerciseOut(
+            id=item.id,
+            exercise_id=item.exercise_id,
+            sets=item.sets,
+            reps=item.reps,
+            rest_seconds=item.rest_seconds,
+            recommended_weight_kg=item.recommended_weight_kg,
+        )
+        for item in sorted(plan.exercises, key=lambda e: e.sort_order)
+    ]
+    if not flat:
+        flat = [
             WorkoutExerciseOut(
                 id=item.id,
                 exercise_id=item.exercise_id,
@@ -57,7 +103,34 @@ def plan_out(plan: models.WorkoutPlan) -> WorkoutPlanOut:
                 rest_seconds=item.rest_seconds,
                 recommended_weight_kg=item.recommended_weight_kg,
             )
-            for item in sorted(plan.exercises, key=lambda e: e.sort_order)
+            for day in days
+            for item in sorted(day.exercises, key=lambda e: e.sort_order)
+        ]
+    return WorkoutPlanOut(
+        id=plan.id,
+        trainer_id=plan.trainer_id,
+        title=plan.title,
+        focus=plan.focus,
+        duration_minutes=plan.duration_minutes,
+        level=plan.level,
+        days_per_week=plan.days_per_week,
+        notes=plan.notes,
+        exercises=flat,
+        days=[
+            PlanDayOut(
+                id=day.id,
+                weekday=day.weekday,
+                start_time=day.start_time,
+                title=day.title,
+                focus=day.focus,
+                duration_minutes=day.duration_minutes,
+                location=day.location,
+                warmup=day.warmup,
+                cooldown=day.cooldown,
+                coach_notes=day.coach_notes,
+                exercises=[_day_exercise_out(item) for item in sorted(day.exercises, key=lambda e: e.sort_order)],
+            )
+            for day in days
         ],
     )
 

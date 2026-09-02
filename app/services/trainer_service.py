@@ -26,9 +26,12 @@ from app.schemas.mappers import (
     workout_log_out,
 )
 from app.schemas.requests import (
+    WEEKDAYS,
     AssignPlanRequest,
     CreateFeedbackRequest,
     CreatePlanRequest,
+    PlanDayExerciseIn,
+    PlanDayIn,
     UpdateTrainerProfileRequest,
     WorkoutExerciseIn,
 )
@@ -98,35 +101,128 @@ class TrainerService:
         return plan_out(plan)
 
     def create_plan(self, trainer_id: str, payload: CreatePlanRequest) -> WorkoutPlanOut:
-        title = payload.title.strip()
-        if not title:
-            raise ValidationAppError("Enter a plan title.")
-        if not payload.exercises:
-            raise ValidationAppError("Add at least one exercise.")
-        self._validate_exercises(payload.exercises)
         plan = models.WorkoutPlan(
             id=str(uuid4()),
             trainer_id=trainer_id,
-            title=title,
-            focus=payload.focus.strip(),
+            title="",
+            focus="",
             duration_minutes=payload.duration_minutes,
             level=payload.level,
             days_per_week=payload.days_per_week,
-            exercises=[
-                models.WorkoutExercise(
-                    id=item.id or str(uuid4()),
-                    exercise_id=item.exercise_id,
-                    sets=item.sets,
-                    reps=item.reps,
-                    rest_seconds=item.rest_seconds,
-                    recommended_weight_kg=item.recommended_weight_kg,
-                    sort_order=index,
+        )
+        self._apply_plan_payload(plan, payload)
+        self.plans.add(plan)
+        loaded = self.plans.get(plan.id)
+        return plan_out(loaded or plan)
+
+    def update_plan(self, trainer_id: str, plan_id: str, payload: CreatePlanRequest) -> WorkoutPlanOut:
+        plan = self.plans.get(plan_id)
+        if plan is None or plan.trainer_id != trainer_id:
+            raise NotFoundError("Workout plan not found.")
+        plan.exercises.clear()
+        plan.days.clear()
+        self._apply_plan_payload(plan, payload)
+        loaded = self.plans.get(plan.id)
+        return plan_out(loaded or plan)
+
+    def _apply_plan_payload(self, plan: models.WorkoutPlan, payload: CreatePlanRequest) -> None:
+        title = payload.title.strip()
+        if not title:
+            raise ValidationAppError("Enter a plan title.")
+        days = payload.days or []
+        flat_in = payload.exercises or []
+        day_exercises = [item for day in days for item in day.exercises]
+        if not days and not flat_in:
+            raise ValidationAppError("Add at least one exercise.")
+        self._validate_exercises(flat_in)
+        self._validate_day_exercises(day_exercises)
+        for day in days:
+            weekday = day.weekday.strip().lower()
+            if weekday not in WEEKDAYS:
+                raise ValidationAppError("Weekday must be monday through sunday.")
+
+        plan.title = title
+        plan.focus = payload.focus.strip()
+        plan.duration_minutes = payload.duration_minutes
+        plan.level = payload.level
+        plan.days_per_week = payload.days_per_week
+        plan.notes = payload.notes.strip() if payload.notes else None
+        plan.days = [self._build_day(day, index) for index, day in enumerate(days)]
+        plan.exercises = self._flatten_exercises(days, flat_in)
+
+    def _build_day(self, day: PlanDayIn, index: int) -> models.PlanDay:
+        return models.PlanDay(
+            id=day.id or str(uuid4()),
+            weekday=day.weekday.strip().lower(),
+            start_time=day.start_time,
+            title=day.title.strip(),
+            focus=day.focus.strip(),
+            duration_minutes=day.duration_minutes,
+            location=day.location,
+            warmup=day.warmup,
+            cooldown=day.cooldown,
+            coach_notes=day.coach_notes,
+            sort_order=index,
+            exercises=[self._build_day_exercise(item, ex_index) for ex_index, item in enumerate(day.exercises)],
+        )
+
+    def _build_day_exercise(self, item: PlanDayExerciseIn, index: int) -> models.PlanExercise:
+        return models.PlanExercise(
+            id=item.id or str(uuid4()),
+            exercise_id=item.exercise_id,
+            sort_order=index,
+            sets=item.sets,
+            reps=item.reps,
+            rest_seconds=item.rest_seconds,
+            recommended_weight_kg=item.recommended_weight_kg,
+            tempo=item.tempo,
+            rpe=item.rpe,
+            notes=item.notes,
+            side=item.side,
+            prescribed_sets=[
+                models.PlanPrescribedSet(
+                    id=row.id or str(uuid4()),
+                    set_number=row.set_number,
+                    reps=row.reps,
+                    weight_kg=row.weight_kg,
+                    rpe=row.rpe,
                 )
-                for index, item in enumerate(payload.exercises)
+                for row in item.prescribed_sets
             ],
         )
-        self.plans.add(plan)
-        return plan_out(plan)
+
+    def _flatten_exercises(
+        self,
+        days: list[PlanDayIn],
+        flat_in: list[WorkoutExerciseIn],
+    ) -> list[models.WorkoutExercise]:
+        source: list[WorkoutExerciseIn] = []
+        if days:
+            for day in days:
+                for item in day.exercises:
+                    source.append(
+                        WorkoutExerciseIn(
+                            exercise_id=item.exercise_id,
+                            sets=item.sets,
+                            reps=item.reps,
+                            rest_seconds=item.rest_seconds,
+                            recommended_weight_kg=item.recommended_weight_kg,
+                        )
+                    )
+        else:
+            source = flat_in
+        return [
+            models.WorkoutExercise(
+                id=item.id or str(uuid4()),
+                exercise_id=item.exercise_id,
+                sets=item.sets,
+                reps=item.reps,
+                rest_seconds=item.rest_seconds,
+                recommended_weight_kg=item.recommended_weight_kg,
+                sort_order=index,
+            )
+            for index, item in enumerate(source)
+        ]
 
     def assign_plan(self, trainer_id: str, payload: AssignPlanRequest) -> AssignmentResponse:
         require_owned_trainee(self.trainees, trainer_id, payload.trainee_id)
@@ -180,6 +276,11 @@ class TrainerService:
         return feedback_out(self.coaching.add_feedback(item))
 
     def _validate_exercises(self, drafts: list[WorkoutExerciseIn]) -> None:
+        for item in drafts:
+            if self.exercises.get(item.exercise_id) is None:
+                raise ValidationAppError(f"Unknown exercise: {item.exercise_id}")
+
+    def _validate_day_exercises(self, drafts: list[PlanDayExerciseIn]) -> None:
         for item in drafts:
             if self.exercises.get(item.exercise_id) is None:
                 raise ValidationAppError(f"Unknown exercise: {item.exercise_id}")

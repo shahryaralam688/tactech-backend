@@ -3,6 +3,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db import models
 
+PLAN_LOAD_OPTIONS = (
+    joinedload(models.WorkoutPlan.exercises),
+    joinedload(models.WorkoutPlan.days)
+    .joinedload(models.PlanDay.exercises)
+    .joinedload(models.PlanExercise.prescribed_sets),
+)
+
 
 class PlanRepository:
     def __init__(self, db: Session) -> None:
@@ -11,7 +18,7 @@ class PlanRepository:
     def get(self, plan_id: str) -> models.WorkoutPlan | None:
         stmt = (
             select(models.WorkoutPlan)
-            .options(joinedload(models.WorkoutPlan.exercises))
+            .options(*PLAN_LOAD_OPTIONS)
             .where(models.WorkoutPlan.id == plan_id)
         )
         return self.db.execute(stmt).unique().scalar_one_or_none()
@@ -19,7 +26,7 @@ class PlanRepository:
     def list_for_trainer(self, trainer_id: str) -> list[models.WorkoutPlan]:
         stmt = (
             select(models.WorkoutPlan)
-            .options(joinedload(models.WorkoutPlan.exercises))
+            .options(*PLAN_LOAD_OPTIONS)
             .where(models.WorkoutPlan.trainer_id == trainer_id)
             .order_by(models.WorkoutPlan.title)
         )

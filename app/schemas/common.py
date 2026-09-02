@@ -69,6 +69,42 @@ class WorkoutExerciseOut(APIModel):
     recommended_weight_kg: float | None = None
 
 
+class PrescribedSetOut(APIModel):
+    id: str
+    set_number: int
+    reps: int
+    weight_kg: float | None = None
+    rpe: float | None = None
+
+
+class PlanDayExerciseOut(APIModel):
+    id: str
+    exercise_id: str
+    sets: int
+    reps: int
+    rest_seconds: int
+    recommended_weight_kg: float | None = None
+    tempo: str | None = None
+    rpe: float | None = None
+    notes: str | None = None
+    side: str | None = None
+    prescribed_sets: list[PrescribedSetOut] = Field(default_factory=list)
+
+
+class PlanDayOut(APIModel):
+    id: str
+    weekday: str
+    start_time: str | None = None
+    title: str
+    focus: str
+    duration_minutes: int
+    location: str | None = None
+    warmup: str | None = None
+    cooldown: str | None = None
+    coach_notes: str | None = None
+    exercises: list[PlanDayExerciseOut] = Field(default_factory=list)
+
+
 class WorkoutPlanOut(APIModel):
     id: str
     trainer_id: str
@@ -77,7 +113,9 @@ class WorkoutPlanOut(APIModel):
     duration_minutes: int
     level: str
     days_per_week: int
+    notes: str | None = None
     exercises: list[WorkoutExerciseOut] = Field(default_factory=list)
+    days: list[PlanDayOut] = Field(default_factory=list)
 
 
 class PlanAssignmentOut(APIModel):
