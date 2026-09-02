@@ -3,7 +3,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.deps import Principal, get_trainer_service, require_trainer
+from app.api.deps import Principal, get_assessment_service, get_trainer_service, require_trainer
+from app.schemas.assessment import AssessmentProgramOut
+from app.services.assessment_service import AssessmentService
 from app.schemas.common import (
     FormReportOut,
     MacroEstimateOut,
@@ -25,6 +27,15 @@ def list_trainees(
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> list[TraineeRosterItem]:
     return service.list_trainees(principal.trainer_id)  # type: ignore[arg-type]
+
+
+@router.get("/trainees/{trainee_id}/assessment", response_model=AssessmentProgramOut | None)
+def trainee_assessment(
+    trainee_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[AssessmentService, Depends(get_assessment_service)],
+) -> AssessmentProgramOut | None:
+    return service.latest_for_trainer(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
 
 
 @router.get("/trainees/{trainee_id}", response_model=TraineeRosterItem)

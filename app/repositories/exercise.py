@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import models
@@ -10,6 +10,10 @@ class ExerciseRepository:
 
     def get(self, exercise_id: str) -> models.Exercise | None:
         return self.db.get(models.Exercise, exercise_id)
+
+    def get_by_name(self, name: str) -> models.Exercise | None:
+        stmt = select(models.Exercise).where(func.lower(models.Exercise.name) == name.strip().lower())
+        return self.db.execute(stmt).scalar_one_or_none()
 
     def list_all(self) -> list[models.Exercise]:
         stmt = select(models.Exercise).order_by(models.Exercise.name)

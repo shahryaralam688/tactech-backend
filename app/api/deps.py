@@ -12,6 +12,7 @@ from app.core.security import decode_token
 from app.db.session import get_db
 from app.services.auth_service import AuthService
 from app.services.trainee_service import TraineeService
+from app.services.assessment_service import AssessmentService
 from app.services.trainer_service import TrainerService
 
 Role = Literal["trainer", "trainee"]
@@ -40,6 +41,10 @@ def get_trainer_service(db: Annotated[Session, Depends(get_db)]) -> TrainerServi
 
 def get_trainee_service(db: Annotated[Session, Depends(get_db)]) -> TraineeService:
     return TraineeService(db)
+
+
+def get_assessment_service(db: Annotated[Session, Depends(get_db)]) -> AssessmentService:
+    return AssessmentService(db)
 
 
 def _bearer_token(authorization: str | None) -> str:

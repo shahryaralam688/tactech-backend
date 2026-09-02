@@ -85,7 +85,11 @@ class WorkoutPlan(Base):
     __tablename__ = "workout_plans"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer_profiles.id", ondelete="CASCADE"), index=True)
+    trainer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     focus: Mapped[str] = mapped_column(String(255), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -93,7 +97,7 @@ class WorkoutPlan(Base):
     days_per_week: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    trainer: Mapped[TrainerProfile] = relationship(back_populates="plans")
+    trainer: Mapped[TrainerProfile | None] = relationship(back_populates="plans")
     exercises: Mapped[list["WorkoutExercise"]] = relationship(
         back_populates="plan",
         cascade="all, delete-orphan",
@@ -269,6 +273,22 @@ class FormReport(Base):
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     cues: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     rep_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class FitnessAssessment(Base):
+    __tablename__ = "fitness_assessments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainee_id: Mapped[str] = mapped_column(ForeignKey("trainee_profiles.id", ondelete="CASCADE"), index=True)
+    trainer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("workout_plans.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
 
 class FoodKnowledge(Base):

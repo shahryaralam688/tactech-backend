@@ -3,7 +3,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.deps import Principal, get_trainee_service, require_trainee
+from app.api.deps import Principal, get_assessment_service, get_trainee_service, require_trainee
+from app.schemas.assessment import AssessmentProgramOut, AssessmentRequest
+from app.services.assessment_service import AssessmentService
 from app.schemas.common import (
     FoodKnowledgeOut,
     FormReportOut,
@@ -23,6 +25,23 @@ from app.schemas.responses import DailyMacrosResponse, TrainerPublic
 from app.services.trainee_service import TraineeService
 
 router = APIRouter(prefix="/trainee", tags=["trainee"])
+
+
+@router.post("/assessment", response_model=AssessmentProgramOut, status_code=status.HTTP_201_CREATED)
+def submit_assessment(
+    payload: AssessmentRequest,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[AssessmentService, Depends(get_assessment_service)],
+) -> AssessmentProgramOut:
+    return service.submit(principal.trainee_id, payload)  # type: ignore[arg-type]
+
+
+@router.get("/assessment", response_model=AssessmentProgramOut | None)
+def latest_assessment(
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[AssessmentService, Depends(get_assessment_service)],
+) -> AssessmentProgramOut | None:
+    return service.latest_for_trainee(principal.trainee_id)  # type: ignore[arg-type]
 
 
 @router.post("/link", response_model=TraineeProfileOut)
