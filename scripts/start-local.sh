@@ -10,16 +10,21 @@ fi
 
 if [ ! -f .env ]; then
   cp .env.example .env
+fi
+
+if grep -Eq 'JWT_SECRET=(replace-with-a-long-random-secret|change-me)$' .env \
+  || grep -Eq 'POSTGRES_PASSWORD=change_me$' .env; then
   jwt="$(openssl rand -base64 48 | tr -d '\n')"
   dbpass="$(openssl rand -hex 16)"
   tmp="$(mktemp)"
   sed \
     -e "s|JWT_SECRET=replace-with-a-long-random-secret|JWT_SECRET=${jwt}|" \
+    -e "s|JWT_SECRET=change-me|JWT_SECRET=${jwt}|" \
     -e "s|POSTGRES_PASSWORD=change_me|POSTGRES_PASSWORD=${dbpass}|" \
     -e "s|DATABASE_URL=postgresql+psycopg2://tactech:change_me@localhost:5432/tactech|DATABASE_URL=postgresql+psycopg2://tactech:${dbpass}@localhost:5432/tactech|" \
     .env > "$tmp"
   mv "$tmp" .env
-  echo "Created .env with generated secrets"
+  echo "Filled .env secrets"
 fi
 
 # shellcheck disable=SC1091
