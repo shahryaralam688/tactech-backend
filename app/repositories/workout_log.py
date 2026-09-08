@@ -17,7 +17,19 @@ class WorkoutLogRepository:
         )
         return list(self.db.execute(stmt).unique().scalars().all())
 
+    def get(self, log_id: str) -> models.WorkoutLog | None:
+        stmt = (
+            select(models.WorkoutLog)
+            .options(joinedload(models.WorkoutLog.sets))
+            .where(models.WorkoutLog.id == log_id)
+        )
+        return self.db.execute(stmt).unique().scalar_one_or_none()
+
     def add(self, log: models.WorkoutLog) -> models.WorkoutLog:
         self.db.add(log)
         self.db.flush()
         return log
+
+    def delete(self, log: models.WorkoutLog) -> None:
+        self.db.delete(log)
+        self.db.flush()

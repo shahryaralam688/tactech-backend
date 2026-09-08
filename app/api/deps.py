@@ -9,10 +9,17 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import ForbiddenError, RateLimitError, UnauthorizedError
 from app.core.redis import RateLimiter, TokenDenylist, get_redis
 from app.core.security import decode_token
+from app.db import models
 from app.db.session import get_db
 from app.services.auth_service import AuthService
-from app.services.trainee_service import TraineeService
 from app.services.assessment_service import AssessmentService
+from app.services.coach_service import CoachService
+from app.services.content_service import ContentService
+from app.services.preference_service import PreferenceService
+from app.services.profile_service import ProfileService
+from app.services.support_service import SupportService
+from app.services.template_service import TemplateService
+from app.services.trainee_service import TraineeService
 from app.services.trainer_service import TrainerService
 
 Role = Literal["trainer", "trainee"]
@@ -47,6 +54,39 @@ def get_assessment_service(db: Annotated[Session, Depends(get_db)]) -> Assessmen
     return AssessmentService(db)
 
 
+def get_profile_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ProfileService:
+    return ProfileService(db, settings)
+
+
+def get_template_service(db: Annotated[Session, Depends(get_db)]) -> TemplateService:
+    return TemplateService(db)
+
+
+def get_preference_service(db: Annotated[Session, Depends(get_db)]) -> PreferenceService:
+    return PreferenceService(db)
+
+
+def get_support_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SupportService:
+    return SupportService(db, settings)
+
+
+def get_content_service() -> ContentService:
+    return ContentService()
+
+
+def get_coach_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CoachService:
+    return CoachService(db, settings)
+
+
 def _bearer_token(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise UnauthorizedError("Authentication required.")
@@ -59,6 +99,7 @@ def _bearer_token(authorization: str | None) -> str:
 def get_principal(
     settings: Annotated[Settings, Depends(get_settings)],
     redis_client: Annotated[Redis, Depends(get_redis)],
+    db: Annotated[Session, Depends(get_db)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
     token = _bearer_token(authorization)
@@ -71,6 +112,9 @@ def get_principal(
     role = payload.get("role")
     if role not in {"trainer", "trainee"}:
         raise UnauthorizedError("Invalid token.")
+    user = db.get(models.User, payload["sub"])
+    if user is None or user.deleted_at is not None:
+        raise UnauthorizedError("User no longer exists.")
     return Principal(
         user_id=payload["sub"],
         role=role,

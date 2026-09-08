@@ -38,7 +38,9 @@ from app.schemas.requests import (
     CreateFormReportRequest,
     CreateMealRequest,
     CreateWorkoutLogRequest,
+    UpdateMealRequest,
     UpdateTraineeProfileRequest,
+    UpdateWorkoutLogRequest,
 )
 from app.schemas.responses import DailyMacrosResponse, TrainerPublic
 
@@ -94,7 +96,7 @@ class TraineeService:
 
     def assigned_plan(self, trainee_id: str) -> WorkoutPlanOut | None:
         assignment = self.assignments.get_for_trainee(trainee_id)
-        if assignment is None or assignment.plan is None:
+        if assignment is None or assignment.plan is None or assignment.plan.deleted_at is not None:
             return None
         return plan_out(assignment.plan)
 
@@ -147,6 +149,72 @@ class TraineeService:
             is_estimate=payload.is_estimate,
         )
         return meal_out(self.meals.add(meal))
+
+    def update_meal(self, trainee_id: str, meal_id: str, payload: UpdateMealRequest) -> MealOut:
+        meal = self.meals.get(meal_id)
+        if meal is None or meal.trainee_id != trainee_id:
+            raise NotFoundError("Meal not found.")
+        if payload.name is not None:
+            name = payload.name.strip()
+            if not name:
+                raise ValidationAppError("Enter a meal name.")
+            meal.name = name
+        if payload.eaten_at is not None:
+            meal.eaten_at = payload.eaten_at
+        if payload.portion_grams is not None:
+            meal.portion_grams = payload.portion_grams
+        if payload.macros is not None:
+            meal.calories = payload.macros.calories
+            meal.protein = payload.macros.protein
+            meal.carbs = payload.macros.carbs
+            meal.fat = payload.macros.fat
+        if payload.source is not None:
+            meal.source = payload.source
+        if payload.is_estimate is not None:
+            meal.is_estimate = payload.is_estimate
+        return meal_out(meal)
+
+    def delete_meal(self, trainee_id: str, meal_id: str) -> None:
+        meal = self.meals.get(meal_id)
+        if meal is None or meal.trainee_id != trainee_id:
+            raise NotFoundError("Meal not found.")
+        self.meals.delete(meal)
+
+    def update_log(self, trainee_id: str, log_id: str, payload: UpdateWorkoutLogRequest) -> WorkoutLogOut:
+        log = self.logs.get(log_id)
+        if log is None or log.trainee_id != trainee_id:
+            raise NotFoundError("Workout log not found.")
+        if payload.plan_id is not None:
+            if self.plans.get(payload.plan_id) is None:
+                raise NotFoundError("Workout plan not found.")
+            log.plan_id = payload.plan_id
+        if payload.completed_at is not None:
+            log.completed_at = payload.completed_at
+        if payload.duration_minutes is not None:
+            log.duration_minutes = payload.duration_minutes
+        if payload.sets is not None:
+            for item in payload.sets:
+                if self.exercises.get(item.exercise_id) is None:
+                    raise ValidationAppError(f"Unknown exercise: {item.exercise_id}")
+            log.sets.clear()
+            log.sets = [
+                models.WorkoutSetLog(
+                    id=item.id or str(uuid4()),
+                    exercise_id=item.exercise_id,
+                    set_number=item.set_number,
+                    reps=item.reps,
+                    weight_kg=item.weight_kg,
+                )
+                for item in payload.sets
+            ]
+        loaded = self.logs.get(log.id)
+        return workout_log_out(loaded or log)
+
+    def delete_log(self, trainee_id: str, log_id: str) -> None:
+        log = self.logs.get(log_id)
+        if log is None or log.trainee_id != trainee_id:
+            raise NotFoundError("Workout log not found.")
+        self.logs.delete(log)
 
     def daily_macros(self, trainee_id: str, on_date: date) -> DailyMacrosResponse:
         meals = self.list_meals(trainee_id, on_date)

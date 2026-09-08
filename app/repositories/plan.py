@@ -15,19 +15,24 @@ class PlanRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def get(self, plan_id: str) -> models.WorkoutPlan | None:
+    def get(self, plan_id: str, *, include_deleted: bool = False) -> models.WorkoutPlan | None:
         stmt = (
             select(models.WorkoutPlan)
             .options(*PLAN_LOAD_OPTIONS)
             .where(models.WorkoutPlan.id == plan_id)
         )
+        if not include_deleted:
+            stmt = stmt.where(models.WorkoutPlan.deleted_at.is_(None))
         return self.db.execute(stmt).unique().scalar_one_or_none()
 
     def list_for_trainer(self, trainer_id: str) -> list[models.WorkoutPlan]:
         stmt = (
             select(models.WorkoutPlan)
             .options(*PLAN_LOAD_OPTIONS)
-            .where(models.WorkoutPlan.trainer_id == trainer_id)
+            .where(
+                models.WorkoutPlan.trainer_id == trainer_id,
+                models.WorkoutPlan.deleted_at.is_(None),
+            )
             .order_by(models.WorkoutPlan.title)
         )
         return list(self.db.execute(stmt).unique().scalars().all())

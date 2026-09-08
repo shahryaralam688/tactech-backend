@@ -25,6 +25,16 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    gender: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    account_type: Mapped[str] = mapped_column(String(32), nullable=False, default="Regular")
+    avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    avatar_asset: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     trainer: Mapped["TrainerProfile | None"] = relationship(back_populates="user", uselist=False)
     trainee: Mapped["TraineeProfile | None"] = relationship(back_populates="user", uselist=False)
@@ -96,6 +106,7 @@ class WorkoutPlan(Base):
     level: Mapped[str] = mapped_column(String(32), nullable=False)
     days_per_week: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     trainer: Mapped[TrainerProfile | None] = relationship(back_populates="plans")
     exercises: Mapped[list["WorkoutExercise"]] = relationship(
@@ -302,3 +313,169 @@ class FoodKnowledge(Base):
     protein: Mapped[float] = mapped_column(Float, nullable=False)
     carbs: Mapped[float] = mapped_column(Float, nullable=False)
     fat: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ExerciseTemplate(Base):
+    __tablename__ = "exercise_templates"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    exercise_id: Mapped[str] = mapped_column(ForeignKey("exercises.id", ondelete="CASCADE"), index=True)
+    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer_profiles.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sets: Mapped[int] = mapped_column(Integer, nullable=False)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False)
+    rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tempo: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rpe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    how_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    side: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    set_rows: Mapped[list["ExerciseTemplateSetRow"]] = relationship(
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="ExerciseTemplateSetRow.set_number",
+    )
+
+
+class ExerciseTemplateSetRow(Base):
+    __tablename__ = "exercise_template_set_rows"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    template_id: Mapped[str] = mapped_column(
+        ForeignKey("exercise_templates.id", ondelete="CASCADE"),
+        index=True,
+    )
+    set_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    template: Mapped[ExerciseTemplate] = relationship(back_populates="set_rows")
+
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    notifications: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    security: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    language: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AppFeedback(Base):
+    __tablename__ = "app_feedback"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    areas: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SupportConversation(Base):
+    __tablename__ = "support_conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    messages: Mapped[list["SupportMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="SupportMessage.created_at",
+    )
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("support_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sender: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attachment_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    conversation: Mapped[SupportConversation] = relationship(back_populates="messages")
+
+
+class TrainerAssessment(Base):
+    __tablename__ = "trainer_assessments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer_profiles.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class CoachConversation(Base):
+    __tablename__ = "coach_conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="AI Coach")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    messages: Mapped[list["CoachMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="CoachMessage.created_at",
+    )
+
+
+class CoachMessage(Base):
+    __tablename__ = "coach_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant | system
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    modality: Mapped[str] = mapped_column(String(16), nullable=False, default="text")  # text | voice | image
+    audio_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    citations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    conversation: Mapped[CoachConversation] = relationship(back_populates="messages")
+
+
+class CoachMemoryChunk(Base):
+    __tablename__ = "coach_memory_chunks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachRtcSession(Base):
+    __tablename__ = "coach_rtc_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("coach_conversations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

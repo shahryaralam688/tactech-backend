@@ -6,7 +6,8 @@ from redis import Redis
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import InvalidCredentialsError, UnauthorizedError, ValidationAppError
+from app.core.exceptions import ConflictError, InvalidCredentialsError, UnauthorizedError, ValidationAppError
+from app.core.logging import get_logger
 from app.core.redis import TokenDenylist
 from app.core.security import create_token, decode_token, hash_password, verify_password
 from app.db import models
@@ -59,8 +60,11 @@ class AuthService:
             raise ValidationAppError("Password must be at least 6 characters.")
         if role not in {"trainer", "trainee"}:
             raise ValidationAppError("Role must be trainer or trainee.")
-        if self.users.get_by_email(normalized_email):
-            raise ValidationAppError("An account with this email already exists.")
+        if self.users.get_by_email(normalized_email, include_deleted=True):
+            raise ConflictError(
+                "An account with this email already exists.",
+                fields={"email": "already registered"},
+            )
 
         user = models.User(
             id=str(uuid4()),
@@ -103,7 +107,7 @@ class AuthService:
 
     def login(self, email: str, password: str) -> AuthResponse:
         user = self.users.get_by_email(email.strip().lower())
-        if user is None or not verify_password(password, user.password_hash):
+        if user is None or user.deleted_at is not None or not verify_password(password, user.password_hash):
             raise InvalidCredentialsError()
         trainer = self.trainers.get_by_user_id(user.id) if user.role == "trainer" else None
         trainee = self.trainees.get_by_user_id(user.id) if user.role == "trainee" else None
@@ -116,7 +120,7 @@ class AuthService:
         jti = payload.get("jti")
         if not jti or self.denylist.is_revoked(jti):
             raise UnauthorizedError("Refresh token has been revoked.")
-        user = self.users.get(payload["sub"])
+        user = self.users.get_active(payload["sub"])
         if user is None:
             raise UnauthorizedError("User no longer exists.")
         trainer = self.trainers.get_by_user_id(user.id) if user.role == "trainer" else None
@@ -132,8 +136,21 @@ class AuthService:
             ttl = int(payload.get("exp", 0)) - int(_utc_now().timestamp())
             self.denylist.revoke(jti, ttl)
 
+    def forgot_password(self, email: str) -> None:
+        user = self.users.get_by_email(email.strip().lower())
+        if user is None:
+            return
+        from hashlib import sha256
+        from secrets import token_urlsafe
+
+        raw = token_urlsafe(32)
+        digest = sha256(raw.encode("utf-8")).hexdigest()
+        ttl = self.settings.password_reset_expire_minutes * 60
+        self.denylist.client.setex(f"pwdreset:{digest}", ttl, user.id)
+        get_logger("tactech.auth").info("password_reset_requested", user_id=user.id)
+
     def me(self, user_id: str) -> MeResponse:
-        user = self.users.get(user_id)
+        user = self.users.get_active(user_id)
         if user is None:
             raise UnauthorizedError("User no longer exists.")
         trainer = self.trainers.get_by_user_id(user.id) if user.role == "trainer" else None

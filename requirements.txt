@@ -11,3 +11,5 @@ bcrypt==4.3.0
 redis==5.2.1
 structlog==25.2.0
 python-multipart==0.0.20
+httpx==0.28.1
+edge-tts==7.0.2

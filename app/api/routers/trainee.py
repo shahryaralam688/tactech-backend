@@ -20,6 +20,8 @@ from app.schemas.requests import (
     CreateMealRequest,
     CreateWorkoutLogRequest,
     LinkTrainerRequest,
+    UpdateMealRequest,
+    UpdateWorkoutLogRequest,
 )
 from app.schemas.responses import DailyMacrosResponse, TrainerPublic
 from app.services.trainee_service import TraineeService
@@ -86,6 +88,25 @@ def save_log(
     return service.save_log(principal.trainee_id, payload)  # type: ignore[arg-type]
 
 
+@router.patch("/logs/{log_id}", response_model=WorkoutLogOut)
+def update_log(
+    log_id: str,
+    payload: UpdateWorkoutLogRequest,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutLogOut:
+    return service.update_log(principal.trainee_id, log_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_log(
+    log_id: str,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> None:
+    service.delete_log(principal.trainee_id, log_id)  # type: ignore[arg-type]
+
+
 @router.get("/meals", response_model=list[MealOut])
 def list_meals(
     principal: Annotated[Principal, Depends(require_trainee)],
@@ -102,6 +123,25 @@ def save_meal(
     service: Annotated[TraineeService, Depends(get_trainee_service)],
 ) -> MealOut:
     return service.save_meal(principal.trainee_id, payload)  # type: ignore[arg-type]
+
+
+@router.patch("/meals/{meal_id}", response_model=MealOut)
+def update_meal(
+    meal_id: str,
+    payload: UpdateMealRequest,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> MealOut:
+    return service.update_meal(principal.trainee_id, meal_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/meals/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_meal(
+    meal_id: str,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> None:
+    service.delete_meal(principal.trainee_id, meal_id)  # type: ignore[arg-type]
 
 
 @router.get("/macros", response_model=DailyMacrosResponse)

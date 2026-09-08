@@ -22,6 +22,21 @@ class AssignmentRepository:
         )
         return self.db.execute(stmt).unique().scalar_one_or_none()
 
+    def get(self, assignment_id: str) -> models.PlanAssignment | None:
+        stmt = (
+            select(models.PlanAssignment)
+            .options(joinedload(models.PlanAssignment.plan), joinedload(models.PlanAssignment.trainee))
+            .where(models.PlanAssignment.id == assignment_id)
+        )
+        return self.db.execute(stmt).unique().scalar_one_or_none()
+
+    def get_by_plan_and_trainee(self, plan_id: str, trainee_id: str) -> models.PlanAssignment | None:
+        stmt = select(models.PlanAssignment).where(
+            models.PlanAssignment.plan_id == plan_id,
+            models.PlanAssignment.trainee_id == trainee_id,
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def replace(self, assignment: models.PlanAssignment) -> models.PlanAssignment:
         self.db.execute(
             delete(models.PlanAssignment).where(models.PlanAssignment.trainee_id == assignment.trainee_id)
@@ -29,3 +44,11 @@ class AssignmentRepository:
         self.db.add(assignment)
         self.db.flush()
         return assignment
+
+    def delete(self, assignment: models.PlanAssignment) -> None:
+        self.db.delete(assignment)
+        self.db.flush()
+
+    def clear_for_plan(self, plan_id: str) -> None:
+        self.db.execute(delete(models.PlanAssignment).where(models.PlanAssignment.plan_id == plan_id))
+        self.db.flush()

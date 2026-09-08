@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
@@ -90,3 +92,21 @@ class AssessmentProgramOut(APIModel):
     coach_summary: str
     nutrition_notes: str
     plan: GeneratedPlanOut
+
+
+class TrainerAssessmentOut(APIModel):
+    id: str
+    trainer_id: str
+    coaching_focus: str
+    years_experience: int
+    certifications: list[str]
+    specialty: str
+    client_types: list[str]
+    max_clients: int
+    session_style: str
+    days_per_week: int
+    training_modes: list[str]
+    gender: str
+    bio: str
+    philosophy: str
+    created_at: datetime

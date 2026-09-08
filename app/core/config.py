@@ -31,6 +31,30 @@ class Settings(BaseSettings):
     login_rate_limit: int = 10
     login_rate_window_seconds: int = 60
 
+    public_base_url: str = ""
+    upload_dir: str = "uploads"
+    max_upload_bytes: int = 5 * 1024 * 1024
+    password_reset_expire_minutes: int = 60
+
+    # AI coach — demo default is groq (free/fast). Switch to openai when ready.
+    ai_provider: str = "groq"  # groq | openai | mock
+    groq_api_key: str = ""
+    groq_chat_model: str = "llama-3.1-8b-instant"
+    groq_stt_model: str = "whisper-large-v3"
+    openai_api_key: str = ""
+    openai_chat_model: str = "gpt-4o-mini"
+    openai_stt_model: str = "whisper-1"
+    openai_tts_model: str = "tts-1"
+    openai_embedding_model: str = "text-embedding-3-small"
+    ai_tts_provider: str = "edge"  # edge | openai | none
+    ai_tts_voice: str = "en-US-JennyNeural"
+    ai_max_context_chunks: int = 8
+    ai_chat_temperature: float = 0.4
+    ai_chat_max_tokens: int = 700
+    groq_vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    openai_vision_model: str = "gpt-4o-mini"
+    webrtc_stun_urls: str = "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"
+
     @field_validator("jwt_secret")
     @classmethod
     def jwt_secret_must_be_set(cls, value: str) -> str:

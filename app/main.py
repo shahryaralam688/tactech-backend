@@ -6,14 +6,16 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from sqlalchemy import text
 
-from app.api.routers import auth, catalog, me, trainee, trainer
+from app.api.routers import auth, catalog, coach, content, me, support, trainee, trainer
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import create_redis_client
+from app.core.storage import ensure_upload_dir
 from app.db.session import engine
 from app.schemas.common import HealthResponse, ReadyResponse
 
@@ -24,6 +26,7 @@ logger = get_logger("tactech")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    ensure_upload_dir(settings)
     logger.info("startup", env=settings.app_env)
     yield
     logger.info("shutdown")
@@ -54,11 +57,21 @@ app.include_router(me.router)
 app.include_router(trainer.router)
 app.include_router(trainee.router)
 app.include_router(catalog.router)
+app.include_router(support.router)
+app.include_router(content.router)
+app.include_router(coach.router)
+ensure_upload_dir(settings)
+app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 
 @app.exception_handler(AppError)
 async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+    content: dict = {"detail": exc.message}
+    if exc.code:
+        content["code"] = exc.code
+    if exc.fields:
+        content["fields"] = exc.fields
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.middleware("http")

@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError, ValidationAppError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.db import models
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.coaching import CoachingRepository
@@ -12,7 +12,9 @@ from app.repositories.meal import MealRepository
 from app.repositories.plan import PlanRepository
 from app.repositories.trainee import TraineeRepository
 from app.repositories.trainer import TrainerRepository
+from app.repositories.user import UserRepository
 from app.repositories.workout_log import WorkoutLogRepository
+from app.schemas.assessment import TrainerAssessmentOut
 from app.schemas.common import MealOut, TrainerFeedbackOut, WorkoutPlanOut
 from app.schemas.mappers import (
     assignment_out,
@@ -32,6 +34,8 @@ from app.schemas.requests import (
     CreatePlanRequest,
     PlanDayExerciseIn,
     PlanDayIn,
+    TrainerAssessmentRequest,
+    UpdatePlanRequest,
     UpdateTrainerProfileRequest,
     WorkoutExerciseIn,
 )
@@ -53,6 +57,8 @@ class TrainerService:
         self.meals = MealRepository(db)
         self.coaching = CoachingRepository(db)
         self.exercises = ExerciseRepository(db)
+        self.users = UserRepository(db)
+        self.db = db
 
     def update_profile(self, trainer_id: str, payload: UpdateTrainerProfileRequest) -> TrainerPublic:
         trainer = self.trainers.get_with_user(trainer_id)
@@ -74,7 +80,11 @@ class TrainerService:
                 TraineeRosterItem(
                     **trainee_out(trainee).model_dump(),
                     user=user_public(trainee.user),
-                    assigned_plan=plan_out(assignment.plan) if assignment and assignment.plan else None,
+                    assigned_plan=(
+                        plan_out(assignment.plan)
+                        if assignment and assignment.plan and assignment.plan.deleted_at is None
+                        else None
+                    ),
                 )
             )
         return items
@@ -88,7 +98,11 @@ class TrainerService:
         return TraineeRosterItem(
             **trainee_out(loaded).model_dump(),
             user=user_public(loaded.user),
-            assigned_plan=plan_out(assignment.plan) if assignment and assignment.plan else None,
+            assigned_plan=(
+                plan_out(assignment.plan)
+                if assignment and assignment.plan and assignment.plan.deleted_at is None
+                else None
+            ),
         )
 
     def list_plans(self, trainer_id: str) -> list[WorkoutPlanOut]:
@@ -101,8 +115,11 @@ class TrainerService:
         return plan_out(plan)
 
     def create_plan(self, trainer_id: str, payload: CreatePlanRequest) -> WorkoutPlanOut:
+        plan_id = payload.id or str(uuid4())
+        if self.plans.get(plan_id, include_deleted=True):
+            raise ConflictError("A plan with this id already exists.")
         plan = models.WorkoutPlan(
-            id=str(uuid4()),
+            id=plan_id,
             trainer_id=trainer_id,
             title="",
             focus="",
@@ -115,15 +132,115 @@ class TrainerService:
         loaded = self.plans.get(plan.id)
         return plan_out(loaded or plan)
 
-    def update_plan(self, trainer_id: str, plan_id: str, payload: CreatePlanRequest) -> WorkoutPlanOut:
+    def update_plan(self, trainer_id: str, plan_id: str, payload: UpdatePlanRequest) -> WorkoutPlanOut:
         plan = self.plans.get(plan_id)
         if plan is None or plan.trainer_id != trainer_id:
             raise NotFoundError("Workout plan not found.")
-        plan.exercises.clear()
-        plan.days.clear()
-        self._apply_plan_payload(plan, payload)
+        if payload.title is not None:
+            title = payload.title.strip()
+            if not title:
+                raise ValidationAppError("Enter a plan title.")
+            plan.title = title
+        if payload.focus is not None:
+            plan.focus = payload.focus.strip()
+        if payload.duration_minutes is not None:
+            plan.duration_minutes = payload.duration_minutes
+        if payload.level is not None:
+            plan.level = payload.level
+        if payload.days_per_week is not None:
+            plan.days_per_week = payload.days_per_week
+        if payload.notes is not None:
+            plan.notes = payload.notes.strip() or None
+        if payload.days is not None or payload.exercises is not None:
+            days = payload.days if payload.days is not None else []
+            flat_in = payload.exercises if payload.exercises is not None else []
+            if payload.days is not None:
+                for day in days:
+                    weekday = day.weekday.strip().lower()
+                    if weekday not in WEEKDAYS:
+                        raise ValidationAppError("Weekday must be monday through sunday.")
+                self._validate_day_exercises([item for day in days for item in day.exercises])
+                plan.days.clear()
+                plan.days = [self._build_day(day, index) for index, day in enumerate(days)]
+            if payload.days is not None or payload.exercises is not None:
+                if payload.exercises is not None:
+                    self._validate_exercises(flat_in)
+                plan.exercises.clear()
+                plan.exercises = self._flatten_exercises(
+                    days if payload.days is not None else [],
+                    flat_in if payload.exercises is not None else [],
+                )
         loaded = self.plans.get(plan.id)
         return plan_out(loaded or plan)
+
+    def delete_plan(self, trainer_id: str, plan_id: str) -> None:
+        plan = self.plans.get(plan_id)
+        if plan is None or plan.trainer_id != trainer_id:
+            raise NotFoundError("Workout plan not found.")
+        plan.deleted_at = _utc_now()
+        self.assignments.clear_for_plan(plan.id)
+
+    def unassign_plan(
+        self,
+        trainer_id: str,
+        assignment_id: str | None = None,
+        plan_id: str | None = None,
+        trainee_id: str | None = None,
+    ) -> None:
+        assignment = None
+        if assignment_id:
+            assignment = self.assignments.get(assignment_id)
+        elif plan_id and trainee_id:
+            assignment = self.assignments.get_by_plan_and_trainee(plan_id, trainee_id)
+        if assignment is None:
+            raise NotFoundError("Assignment not found.")
+        require_owned_trainee(self.trainees, trainer_id, assignment.trainee_id)
+        plan = self.plans.get(assignment.plan_id, include_deleted=True)
+        if plan is not None and plan.trainer_id and plan.trainer_id != trainer_id:
+            raise NotFoundError("Assignment not found.")
+        self.assignments.delete(assignment)
+
+    def save_trainer_assessment(
+        self,
+        trainer_id: str,
+        payload: TrainerAssessmentRequest,
+    ) -> TrainerAssessmentOut:
+        trainer = self.trainers.get(trainer_id)
+        if trainer is None:
+            raise NotFoundError("Trainer profile not found.")
+        trainer.specialty = payload.specialty.strip() or trainer.specialty
+        trainer.years_experience = payload.years_experience
+        trainer.bio = payload.bio.strip() or trainer.bio
+        user = self.users.get(trainer.user_id)
+        if user is not None:
+            user.gender = payload.gender.strip() or user.gender
+            if payload.bio.strip():
+                user.bio = payload.bio.strip()
+        row = models.TrainerAssessment(
+            id=str(uuid4()),
+            trainer_id=trainer_id,
+            created_at=_utc_now(),
+            payload=payload.model_dump(by_alias=True),
+        )
+        self.db.add(row)
+        self.db.flush()
+        return TrainerAssessmentOut(
+            id=row.id,
+            trainer_id=trainer_id,
+            coaching_focus=payload.coaching_focus,
+            years_experience=payload.years_experience,
+            certifications=payload.certifications,
+            specialty=payload.specialty,
+            client_types=payload.client_types,
+            max_clients=payload.max_clients,
+            session_style=payload.session_style,
+            days_per_week=payload.days_per_week,
+            training_modes=payload.training_modes,
+            gender=payload.gender,
+            bio=payload.bio,
+            philosophy=payload.philosophy,
+            created_at=row.created_at,
+        )
 
     def _apply_plan_payload(self, plan: models.WorkoutPlan, payload: CreatePlanRequest) -> None:
         title = payload.title.strip()

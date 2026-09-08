@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, status
 
 from app.api.deps import enforce_auth_rate_limit, get_auth_service, get_principal
 from app.api.deps import Principal
+from app.schemas.profile import ForgotPasswordRequest
 from app.schemas.requests import LoginRequest, LogoutRequest, RefreshRequest, SignupRequest
 from app.schemas.responses import AuthResponse, MeResponse
 from app.services.auth_service import AuthService
@@ -49,6 +50,15 @@ def logout(
     service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> None:
     service.logout(payload.refresh_token)
+
+
+@router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    service: Annotated[AuthService, Depends(get_auth_service)],
+    _: Annotated[None, Depends(enforce_auth_rate_limit)],
+) -> None:
+    service.forgot_password(str(payload.email))
 
 
 @router.get("/me", response_model=MeResponse)

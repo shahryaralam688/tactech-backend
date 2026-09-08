@@ -19,7 +19,14 @@ class MealRepository:
         stmt = stmt.order_by(models.Meal.eaten_at.desc())
         return list(self.db.execute(stmt).scalars().all())
 
+    def get(self, meal_id: str) -> models.Meal | None:
+        return self.db.get(models.Meal, meal_id)
+
     def add(self, meal: models.Meal) -> models.Meal:
         self.db.add(meal)
         self.db.flush()
         return meal
+
+    def delete(self, meal: models.Meal) -> None:
+        self.db.delete(meal)
+        self.db.flush()

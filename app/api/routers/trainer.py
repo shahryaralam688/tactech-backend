@@ -3,8 +3,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.deps import Principal, get_assessment_service, get_trainer_service, require_trainer
-from app.schemas.assessment import AssessmentProgramOut
+from app.api.deps import (
+    Principal,
+    get_assessment_service,
+    get_template_service,
+    get_trainer_service,
+    require_trainer,
+)
+from app.core.exceptions import ValidationAppError
+from app.schemas.assessment import AssessmentProgramOut, TrainerAssessmentOut
 from app.services.assessment_service import AssessmentService
 from app.schemas.common import (
     FormReportOut,
@@ -14,8 +21,16 @@ from app.schemas.common import (
     WorkoutLogOut,
     WorkoutPlanOut,
 )
-from app.schemas.requests import AssignPlanRequest, CreateFeedbackRequest, CreatePlanRequest
+from app.schemas.requests import (
+    AssignPlanRequest,
+    CreateFeedbackRequest,
+    CreatePlanRequest,
+    TrainerAssessmentRequest,
+    UpdatePlanRequest,
+)
 from app.schemas.responses import AssignmentResponse, TraineeRosterItem
+from app.schemas.templates import ExerciseTemplateIn, ExerciseTemplateOut, UpdateExerciseTemplateRequest
+from app.services.template_service import TemplateService
 from app.services.trainer_service import TrainerService
 
 router = APIRouter(prefix="/trainer", tags=["trainer"])
@@ -123,11 +138,66 @@ def get_plan(
 @router.patch("/plans/{plan_id}", response_model=WorkoutPlanOut)
 def update_plan(
     plan_id: str,
-    payload: CreatePlanRequest,
+    payload: UpdatePlanRequest,
     principal: Annotated[Principal, Depends(require_trainer)],
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> WorkoutPlanOut:
     return service.update_plan(principal.trainer_id, plan_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_plan(
+    plan_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> None:
+    service.delete_plan(principal.trainer_id, plan_id)  # type: ignore[arg-type]
+
+
+@router.get("/exercise-templates", response_model=list[ExerciseTemplateOut])
+def list_exercise_templates(
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+    exercise_id: str | None = Query(default=None),
+) -> list[ExerciseTemplateOut]:
+    return service.list_templates(principal.trainer_id, exercise_id)  # type: ignore[arg-type]
+
+
+@router.post("/exercise-templates", response_model=ExerciseTemplateOut, status_code=status.HTTP_201_CREATED)
+def create_exercise_template(
+    payload: ExerciseTemplateIn,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+) -> ExerciseTemplateOut:
+    return service.create(principal.trainer_id, payload)  # type: ignore[arg-type]
+
+
+@router.patch("/exercise-templates/{template_id}", response_model=ExerciseTemplateOut)
+def update_exercise_template(
+    template_id: str,
+    payload: UpdateExerciseTemplateRequest,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+) -> ExerciseTemplateOut:
+    return service.update(principal.trainer_id, template_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/exercise-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_exercise_template(
+    template_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+) -> None:
+    service.delete(principal.trainer_id, template_id)  # type: ignore[arg-type]
+
+
+@router.post("/assessment", response_model=TrainerAssessmentOut, status_code=status.HTTP_201_CREATED)
+def trainer_assessment(
+    payload: TrainerAssessmentRequest,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> TrainerAssessmentOut:
+    return service.save_trainer_assessment(principal.trainer_id, payload)  # type: ignore[arg-type]
 
 
 @router.post("/assignments", response_model=AssignmentResponse, status_code=status.HTTP_201_CREATED)
@@ -137,6 +207,27 @@ def assign_plan(
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> AssignmentResponse:
     return service.assign_plan(principal.trainer_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/assignments/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unassign_by_id(
+    assignment_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> None:
+    service.unassign_plan(principal.trainer_id, assignment_id=assignment_id)  # type: ignore[arg-type]
+
+
+@router.delete("/assignments", status_code=status.HTTP_204_NO_CONTENT)
+def unassign_by_query(
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+    plan_id: str | None = Query(default=None),
+    trainee_id: str | None = Query(default=None),
+) -> None:
+    if not plan_id or not trainee_id:
+        raise ValidationAppError("Provide planId and traineeId.")
+    service.unassign_plan(principal.trainer_id, plan_id=plan_id, trainee_id=trainee_id)  # type: ignore[arg-type]
 
 
 @router.post("/feedback", response_model=TrainerFeedbackOut, status_code=status.HTTP_201_CREATED)

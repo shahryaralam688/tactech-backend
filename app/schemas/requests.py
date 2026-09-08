@@ -88,6 +88,7 @@ class PlanDayIn(RequestModel):
 
 
 class CreatePlanRequest(RequestModel):
+    id: str | None = None
     title: str
     focus: str
     duration_minutes: int = Field(ge=1)
@@ -96,6 +97,17 @@ class CreatePlanRequest(RequestModel):
     notes: str | None = None
     exercises: list[WorkoutExerciseIn] = Field(default_factory=list)
     days: list[PlanDayIn] = Field(default_factory=list)
+
+
+class UpdatePlanRequest(RequestModel):
+    title: str | None = None
+    focus: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=1)
+    level: str | None = None
+    days_per_week: int | None = Field(default=None, ge=1, le=7)
+    notes: str | None = None
+    exercises: list[WorkoutExerciseIn] | None = None
+    days: list[PlanDayIn] | None = None
 
 
 class AssignPlanRequest(APIModel):
@@ -125,6 +137,37 @@ class CreateMealRequest(APIModel):
     macros: MacroEstimateOut
     source: str = "log"
     is_estimate: bool = True
+
+
+class UpdateMealRequest(RequestModel):
+    name: str | None = None
+    eaten_at: datetime | None = None
+    portion_grams: float | None = Field(default=None, gt=0)
+    macros: MacroEstimateOut | None = None
+    source: str | None = None
+    is_estimate: bool | None = None
+
+
+class UpdateWorkoutLogRequest(RequestModel):
+    plan_id: str | None = None
+    completed_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, ge=1)
+    sets: list[WorkoutSetLogIn] | None = None
+
+
+class TrainerAssessmentRequest(RequestModel):
+    coaching_focus: str
+    years_experience: int = Field(ge=0)
+    certifications: list[str] = Field(default_factory=list)
+    specialty: str
+    client_types: list[str] = Field(default_factory=list)
+    max_clients: int = Field(ge=1)
+    session_style: str
+    days_per_week: int = Field(ge=1, le=7)
+    training_modes: list[str] = Field(default_factory=list)
+    gender: str
+    bio: str
+    philosophy: str = ""
 
 
 class CreateFeedbackRequest(APIModel):
