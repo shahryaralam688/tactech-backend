@@ -12,8 +12,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from app.db.base import Base
+
+# OpenAI text-embedding-3-small
+COACH_EMBEDDING_DIM = 1536
 
 
 class User(Base):
@@ -462,7 +466,7 @@ class CoachMemoryChunk(Base):
     source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     source_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    embedding: Mapped[list | None] = mapped_column(Vector(COACH_EMBEDDING_DIM), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import Principal, get_coach_service, get_principal, get_settings
 from app.core.config import Settings
+from app.core.exceptions import AppError
 from app.core.security import decode_token
 from app.db.session import SessionLocal
 from app.repositories.coach import CoachRepository
@@ -82,10 +83,28 @@ async def chat(
     if payload.stream:
 
         async def event_gen():
-            async for chunk in service.stream_chat(
-                principal, payload.message, payload.conversation_id, request
-            ):
-                yield f"data: {chunk}\n\n"
+            try:
+                async for chunk in service.stream_chat(
+                    principal, payload.message, payload.conversation_id, request
+                ):
+                    yield f"data: {chunk}\n\n"
+            except AppError as exc:
+                # Response already started (SSE) — send error event instead of raising
+                payload_err = {
+                    "event": "error",
+                    "detail": exc.message,
+                    "code": exc.code or "AI_ERROR",
+                    "statusCode": exc.status_code,
+                }
+                yield f"data: {json.dumps(payload_err)}\n\n"
+            except Exception:
+                payload_err = {
+                    "event": "error",
+                    "detail": "AI coach failed unexpectedly. Try again.",
+                    "code": "AI_ERROR",
+                    "statusCode": 500,
+                }
+                yield f"data: {json.dumps(payload_err)}\n\n"
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
     return await service.chat(principal, payload.message, payload.conversation_id, request)

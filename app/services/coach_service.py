@@ -7,7 +7,7 @@ from fastapi import Request, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, ValidationAppError
+from app.core.exceptions import AppError, NotFoundError, ValidationAppError
 from app.core.storage import absolute_media_url, ensure_upload_dir, public_base, read_image, save_bytes
 from app.db import models
 from app.repositories.coach import CoachRepository
@@ -39,18 +39,27 @@ from app.services.ai.providers import (
 if TYPE_CHECKING:
     from app.api.deps import Principal
 
-SYSTEM_PROMPT = """You are TacTech AI Coach — a sharp, supportive fitness coach inside a trainer/trainee app.
-Use ONLY the provided MEMORY CONTEXT about this user (profile, plan, logs, meals, feedback, assessments).
-If context is missing, say what you need and give safe general guidance.
-Be concise, actionable, and specific to their goal/plan. Never invent medical diagnoses.
-Prefer short paragraphs or tight bullet points. Match the user's language (Urdu/English/Hinglish) when clear.
-When an image is provided, analyze it for coaching (form, meal composition, progress, equipment) and tie advice to their memory context.
+SYSTEM_PROMPT = """You are TacTech AI Coach — a real human coach chatting inside a fitness app.
+
+How you talk:
+- Sound natural, warm, and clear — like a coach texting a client, not a robot or textbook.
+- Short readable sentences. Everyday words. Light Hinglish/Urdu/English matching the user.
+- 2–5 short sentences or a few simple bullets max. No walls of text.
+- Be specific using MEMORY CONTEXT (their plan, goals, logs, meals, feedback). Use their name/details when useful.
+- Ask at most one short follow-up question when it helps.
+- Never invent medical diagnoses. Never dump raw JSON or memory scores.
+- If memory is thin, say so casually and give safe practical advice.
+
+When they share a photo, react like a coach looking at it with them, then give 1–3 concrete tips tied to their context.
 """
 
-VISION_SYSTEM = """You are TacTech AI Coach vision assistant.
-Analyze the user's fitness-related photo (form check, meal plate, progress photo, gym setup).
-Give concrete, safe coaching feedback. Never invent medical diagnoses.
-Use MEMORY CONTEXT when provided. Be concise and actionable.
+VISION_SYSTEM = """You are TacTech AI Coach looking at a user's photo with them.
+
+Talk like a supportive coach on chat: natural, clear, short.
+Describe what you notice in plain language, then give 1–3 actionable tips.
+Use MEMORY CONTEXT (goal, plan, calories, feedback) when relevant.
+No medical diagnoses. No robotic lists unless a tiny checklist really helps.
+Match the user's language (Urdu/English/Hinglish).
 """
 
 
@@ -185,13 +194,26 @@ class CoachService:
         )
 
         parts: list[str] = []
-        async for delta in self.chat_provider.stream(
-            llm_messages,
-            temperature=self.settings.ai_chat_temperature,
-            max_tokens=self.settings.ai_chat_max_tokens,
-        ):
-            parts.append(delta)
-            yield json.dumps({"event": "delta", "text": delta})
+        try:
+            async for delta in self.chat_provider.stream(
+                llm_messages,
+                temperature=self.settings.ai_chat_temperature,
+                max_tokens=self.settings.ai_chat_max_tokens,
+            ):
+                parts.append(delta)
+                yield json.dumps({"event": "delta", "text": delta})
+        except AppError as exc:
+            # Keep user message; surface error cleanly to SSE consumer
+            yield json.dumps(
+                {
+                    "event": "error",
+                    "detail": exc.message,
+                    "code": exc.code or "AI_ERROR",
+                    "statusCode": exc.status_code,
+                    "conversationId": conversation.id,
+                }
+            )
+            return
 
         reply = "".join(parts).strip() or "Sorry — I could not generate a reply."
         assistant_msg = self.repo.add_message(
@@ -263,10 +285,11 @@ class CoachService:
 
         citations = await self.memory.retrieve(principal.user_id, caption)
         memory_block = "\n".join(
-            f"- ({c['sourceType']} score={c['score']}) {c['content']}" for c in citations
-        ) or "- (no memory yet)"
+            f"- {c['content']}" for c in citations
+        ) or "- (no saved context yet)"
         system = (
-            f"{VISION_SYSTEM}\n\nUSER ROLE: {principal.role}\nMEMORY CONTEXT:\n{memory_block}"
+            f"{VISION_SYSTEM}\n\nUSER ROLE: {principal.role}\n"
+            f"WHAT YOU KNOW ABOUT THIS USER:\n{memory_block}"
         )
         analysis = await self.vision_provider.analyze(
             system_prompt=system,
@@ -339,7 +362,14 @@ class CoachService:
         return [CoachRtcIceServer(urls=urls)]
 
     async def _speak_and_store(self, text: str, request: Request) -> str | None:
-        audio_bytes, extension = await self.tts.synthesize(text)
+        """Best-effort TTS. Never fail the chat/voice turn if speech synthesis is down."""
+        try:
+            audio_bytes, extension = await self.tts.synthesize(text)
+        except Exception as exc:
+            from app.core.logging import get_logger
+
+            get_logger("tactech.coach").warning("tts_skipped", error=str(exc)[:240])
+            return None
         if not audio_bytes:
             return None
         ensure_upload_dir(self.settings)
@@ -354,11 +384,11 @@ class CoachService:
         user_text: str,
     ) -> list[dict[str, str]]:
         memory_block = "\n".join(
-            f"- ({c['sourceType']} score={c['score']}) {c['content']}" for c in citations
-        ) or "- (no memory yet — ask user to sync or answer generally)"
+            f"- {c['content']}" for c in citations
+        ) or "- (no saved context yet — keep advice practical and ask one clarifying question)"
         system = (
             f"{SYSTEM_PROMPT}\n\nUSER ROLE: {principal.role}\n"
-            f"MEMORY CONTEXT:\n{memory_block}"
+            f"WHAT YOU KNOW ABOUT THIS USER:\n{memory_block}"
         )
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
         for msg in history[-10:]:

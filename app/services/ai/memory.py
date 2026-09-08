@@ -1,4 +1,4 @@
-"""Build and retrieve per-user coach memory vectors from trainer/trainee data."""
+"""Build and retrieve per-user coach memory vectors via pgvector."""
 
 from __future__ import annotations
 
@@ -10,8 +10,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
+from app.core.logging import get_logger
 from app.db import models
 from app.services.ai.providers import EmbeddingProvider, cosine_similarity
+
+log = get_logger("tactech.memory")
 
 
 def _utcnow() -> datetime:
@@ -36,8 +39,15 @@ class CoachMemoryService:
             self.db.commit()
             return 0
         vectors = await self.embedder.embed([c["content"] for c in chunks])
+        dim = self.settings.ai_embedding_dimensions
         now = _utcnow()
         for chunk, vector in zip(chunks, vectors):
+            if len(vector) != dim:
+                # pad/truncate defensive for local fallback mismatches
+                if len(vector) < dim:
+                    vector = list(vector) + [0.0] * (dim - len(vector))
+                else:
+                    vector = list(vector)[:dim]
             self.db.add(
                 models.CoachMemoryChunk(
                     id=str(uuid4()),
@@ -55,16 +65,51 @@ class CoachMemoryService:
 
     async def retrieve(self, user_id: str, query: str, top_k: int | None = None) -> list[dict]:
         top_k = top_k or self.settings.ai_max_context_chunks
+        query_vec = (await self.embedder.embed([query]))[0]
+        dim = self.settings.ai_embedding_dimensions
+        if len(query_vec) != dim:
+            if len(query_vec) < dim:
+                query_vec = list(query_vec) + [0.0] * (dim - len(query_vec))
+            else:
+                query_vec = list(query_vec)[:dim]
+
+        try:
+            distance = models.CoachMemoryChunk.embedding.cosine_distance(query_vec)
+            rows = self.db.execute(
+                select(models.CoachMemoryChunk, distance.label("distance"))
+                .where(models.CoachMemoryChunk.user_id == user_id)
+                .where(models.CoachMemoryChunk.embedding.is_not(None))
+                .order_by(distance)
+                .limit(top_k)
+            ).all()
+            results = []
+            for row, dist in rows:
+                score = round(1.0 - float(dist), 4)
+                if score < 0.05 and len(results) >= 3:
+                    continue
+                results.append(
+                    {
+                        "id": row.id,
+                        "sourceType": row.source_type,
+                        "sourceId": row.source_id,
+                        "content": row.content,
+                        "score": score,
+                    }
+                )
+            return results
+        except Exception as exc:
+            # Fallback if extension/index missing in some environments
+            log.warning("pgvector_retrieve_fallback", error=str(exc)[:200])
+            return await self._retrieve_python(user_id, query_vec, top_k)
+
+    async def _retrieve_python(self, user_id: str, query_vec: list[float], top_k: int) -> list[dict]:
         rows = self.db.scalars(
             select(models.CoachMemoryChunk).where(models.CoachMemoryChunk.user_id == user_id)
         ).all()
-        if not rows:
-            return []
-        query_vec = (await self.embedder.embed([query]))[0]
         scored: list[tuple[float, models.CoachMemoryChunk]] = []
         for row in rows:
-            score = cosine_similarity(query_vec, row.embedding or [])
-            scored.append((score, row))
+            emb = list(row.embedding) if row.embedding is not None else []
+            scored.append((cosine_similarity(query_vec, emb), row))
         scored.sort(key=lambda item: item[0], reverse=True)
         results = []
         for score, row in scored[:top_k]:

@@ -49,5 +49,5 @@ class FileTooLargeError(AppError):
 
 
 class RateLimitError(AppError):
-    def __init__(self) -> None:
-        super().__init__("Too many attempts. Try again shortly.", status_code=429, code="RATE_LIMITED")
+    def __init__(self, message: str = "Too many attempts. Try again shortly.") -> None:
+        super().__init__(message, status_code=429, code="RATE_LIMITED")
