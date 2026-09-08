@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from uuid import uuid4
+import math
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +10,26 @@ from app.db import models
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _sanitize_citations(citations: list | None) -> list | None:
+    """Ensure citations are JSONB-safe (no NaN/Inf)."""
+    if not citations:
+        return citations
+    cleaned: list = []
+    for item in citations:
+        if not isinstance(item, dict):
+            cleaned.append(item)
+            continue
+        row = dict(item)
+        if "score" in row:
+            try:
+                score = float(row["score"])
+            except (TypeError, ValueError):
+                score = 0.0
+            row["score"] = round(score, 4) if math.isfinite(score) else 0.0
+        cleaned.append(row)
+    return cleaned
 
 
 class CoachRepository:
@@ -77,7 +98,7 @@ class CoachRepository:
             modality=modality,
             audio_url=audio_url,
             image_url=image_url,
-            citations=citations,
+            citations=_sanitize_citations(citations),
             created_at=now,
         )
         conversation.updated_at = now

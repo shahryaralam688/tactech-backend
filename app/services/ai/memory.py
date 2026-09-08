@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -19,6 +20,17 @@ log = get_logger("tactech.memory")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _json_safe_score(value: object, default: float = 0.0) -> float:
+    """Postgres JSONB rejects NaN/Inf — always store a finite float."""
+    try:
+        score = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(score):
+        return default
+    return round(score, 4)
 
 
 def _trim(text: str, limit: int = 900) -> str:
@@ -84,7 +96,7 @@ class CoachMemoryService:
             ).all()
             results = []
             for row, dist in rows:
-                score = round(1.0 - float(dist), 4)
+                score = _json_safe_score(1.0 - float(dist) if dist is not None else 0.0)
                 if score < 0.05 and len(results) >= 3:
                     continue
                 results.append(
@@ -109,7 +121,7 @@ class CoachMemoryService:
         scored: list[tuple[float, models.CoachMemoryChunk]] = []
         for row in rows:
             emb = list(row.embedding) if row.embedding is not None else []
-            scored.append((cosine_similarity(query_vec, emb), row))
+            scored.append((_json_safe_score(cosine_similarity(query_vec, emb)), row))
         scored.sort(key=lambda item: item[0], reverse=True)
         results = []
         for score, row in scored[:top_k]:
@@ -121,7 +133,7 @@ class CoachMemoryService:
                     "sourceType": row.source_type,
                     "sourceId": row.source_id,
                     "content": row.content,
-                    "score": round(score, 4),
+                    "score": score,
                 }
             )
         return results
