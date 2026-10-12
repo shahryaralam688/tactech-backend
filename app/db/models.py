@@ -2,10 +2,13 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -38,6 +41,8 @@ class User(Base):
     avatar_asset: Mapped[str | None] = mapped_column(String(128), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assessment_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     trainer: Mapped["TrainerProfile | None"] = relationship(back_populates="user", uselist=False)
@@ -483,3 +488,593 @@ class CoachRtcSession(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatThread(Base):
+    """1:1 trainer ↔ trainee human messaging (separate from AI coach + support)."""
+
+    __tablename__ = "chat_threads"
+    __table_args__ = (
+        UniqueConstraint("trainer_user_id", "trainee_user_id", name="uq_chat_threads_pair"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainer_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    trainee_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_message_preview: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    trainer_unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trainee_unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "client_id", name="uq_chat_messages_client"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_threads.id", ondelete="CASCADE"), index=True)
+    sender_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    sender_role: Mapped[str] = mapped_column(String(16), nullable=False)  # trainer | trainee
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="text")  # text | attachment | call_event
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attachment_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attachment_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # image | video | voice | file
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    call_outcome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reply_to_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    reply_to_text: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    reply_to_sender_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_for_everyone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    thread: Mapped[ChatThread] = relationship(back_populates="messages")
+    reactions: Mapped[list["ChatMessageReaction"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+
+class ChatMessageReaction(Base):
+    """One emoji reaction per user per message (WhatsApp-like)."""
+
+    __tablename__ = "chat_message_reactions"
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_chat_reaction_user"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    emoji: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    message: Mapped[ChatMessage] = relationship(back_populates="reactions")
+
+
+class ChatRtcSession(Base):
+    """Peer-to-peer WebRTC session for trainer↔trainee video calls (not AI coach)."""
+
+    __tablename__ = "chat_rtc_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_threads.id", ondelete="CASCADE"), index=True)
+    created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")  # active | ended
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DevicePushToken(Base):
+    """APNs/FCM device tokens for remote push."""
+
+    __tablename__ = "device_push_tokens"
+    __table_args__ = (UniqueConstraint("user_id", "token", name="uq_device_push_tokens_user_token"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(512), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False, default="ios")  # ios | android
+    device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AppNotification(Base):
+    """In-app notification inbox (also drives remote push data payloads)."""
+
+    __tablename__ = "app_notifications"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachProfile(Base):
+    """Public coach “file” for discovery (trainer-owned). Separate from TrainerProfile internals."""
+
+    __tablename__ = "coach_profiles"
+    __table_args__ = (
+        Index("ix_coach_profiles_public_updated", "is_public", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    headline: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    bio: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    city: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False, default="PK")
+    specialties: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    languages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    gym_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    years_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cover_image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Phase 5 — denormalized aggregates (visible reviews only)
+    rating_avg: Mapped[object | None] = mapped_column(Numeric(3, 2), nullable=True)
+    rating_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Phase 7 — trust badge
+    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="none"
+    )  # none | pending | approved | rejected | revoked
+    # Phase 9 — follow / hire
+    follow_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual"
+    )  # manual | auto_accept
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachFollow(Base):
+    """Free marketplace follow/hire request → roster link on accept (Phase 9)."""
+
+    __tablename__ = "coach_follows"
+    __table_args__ = (
+        Index("ix_coach_follows_trainer_status", "trainer_user_id", "status"),
+        Index("ix_coach_follows_coach_status", "coach_profile_id", "status"),
+        Index("ix_coach_follows_trainee_status", "trainee_user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trainer_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trainee_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # pending | active | declined | ended
+    package_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    package_title: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class CoachPackage(Base):
+    """Trainer service listing (Phase 8). Price is informational — no platform checkout yet."""
+
+    __tablename__ = "coach_packages"
+    __table_args__ = (
+        Index("ix_coach_packages_profile_status_sort", "coach_profile_id", "status", "sort_order"),
+        Index("ix_coach_packages_user_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    billing_period: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    includes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    delivery: Mapped[str] = mapped_column(String(32), nullable=False, default="online")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    is_featured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachPackageInquiry(Base):
+    """Package inquire → chat (Phase 8). Analytics-friendly; chat is source of conversation."""
+
+    __tablename__ = "coach_package_inquiries"
+    __table_args__ = (
+        Index("ix_package_inquiries_package_created", "package_id", "created_at"),
+        Index("ix_package_inquiries_coach_created", "coach_profile_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    package_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_packages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trainee_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachVerificationApplication(Base):
+    """Trainer verification application (Phase 7). History kept; one open at a time."""
+
+    __tablename__ = "coach_verification_applications"
+    __table_args__ = (
+        Index("ix_verify_apps_user_status", "user_id", "status"),
+        Index("ix_verify_apps_status_submitted", "status", "submitted_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # draft | submitted | under_review | approved | rejected | canceled
+    legal_full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False, default="PK")
+    phone_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    attestation_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    attestation_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reviewer_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachVerificationDocument(Base):
+    """Evidence files for a verification application. Never expose on public discovery."""
+
+    __tablename__ = "coach_verification_documents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_verification_applications.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    doc_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # government_id | certification | selfie | other
+    file_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    file_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    original_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachProfileEvent(Base):
+    """Privacy-safe discovery analytics (Phase 6). viewer_user_id never returned to trainers."""
+
+    __tablename__ = "coach_profile_events"
+    __table_args__ = (
+        Index(
+            "ix_coach_events_profile_type_created",
+            "coach_profile_id",
+            "event_type",
+            "created_at",
+        ),
+        Index(
+            "ix_coach_events_profile_viewer_type_created",
+            "coach_profile_id",
+            "viewer_user_id",
+            "event_type",
+            "created_at",
+        ),
+        Index("ix_coach_events_trainer_id", "trainer_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    viewer_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # view | impression | contact | contact_created
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class CoachReview(Base):
+    """Trainee review of a coach profile. One per (author_user_id, coach_profile_id)."""
+
+    __tablename__ = "coach_reviews"
+    __table_args__ = (
+        UniqueConstraint("author_user_id", "coach_profile_id", name="uq_coach_reviews_author_coach"),
+        Index("ix_coach_reviews_author_user_id", "author_user_id"),
+        Index(
+            "ix_coach_reviews_coach_created",
+            "coach_profile_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coach_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_trainee_id: Mapped[str | None] = mapped_column(
+        ForeignKey("trainee_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoachReviewReport(Base):
+    """Minimal moderation report. Auto-hide threshold: ≥3 distinct reporters."""
+
+    __tablename__ = "coach_review_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "review_id",
+            "reporter_user_id",
+            name="uq_coach_review_reports_review_reporter",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    review_id: Mapped[str] = mapped_column(
+        ForeignKey("coach_reviews.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reporter_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiEntitlement(Base):
+    """Trainee AI subscription (Apple IAP). One row per user; originalTransactionId unique globally."""
+
+    __tablename__ = "ai_entitlements"
+    __table_args__ = (
+        Index("ix_ai_entitlements_user_status_ends", "user_id", "status", "ends_at"),
+        Index("ix_ai_entitlements_ends_at", "ends_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("billing_products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    plan: Mapped[str | None] = mapped_column(String(64), nullable=True)  # product id alias
+    apple_product_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    original_transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    latest_transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="expired"
+    )  # active | grace | billing_retry | expired | refunded | revoked
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    environment: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Sandbox | Production
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)  # apple | manual
+    raw_last_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BillingProduct(Base):
+    """Sellable SKUs. type=boost (Stripe/JazzCash/Easypaisa) | ai (Apple IAP)."""
+
+    __tablename__ = "billing_products"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # boost | ai
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tier: Mapped[str] = mapped_column(String(64), nullable=False, default="featured")
+    amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="usd")
+    stripe_price_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    apple_product_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    billing_period: Mapped[str | None] = mapped_column(String(32), nullable=True)  # month | year
+    providers: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # ["stripe"] | ["jazzcash","easypaisa"]
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiUsageWeekly(Base):
+    """Free-tease AI message counters per ISO week (when AI_FREE_TEASE_MESSAGES_PER_WEEK > 0)."""
+
+    __tablename__ = "ai_usage_weekly"
+    __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_ai_usage_weekly_user_week"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    week_start: Mapped[object] = mapped_column(Date, nullable=False)
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CoachBoost(Base):
+    """Discovery boost window. Active when status=active and startsAt <= now < endsAt.
+
+    Stacking: extend endsAt from current endsAt when already active (single row).
+    Idempotent activation keyed by stripe_checkout_session_id.
+    """
+
+    __tablename__ = "coach_boosts"
+    __table_args__ = (
+        Index("ix_coach_boosts_user_status_ends", "user_id", "status", "ends_at"),
+        Index("ix_coach_boosts_ends_at", "ends_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    trainer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("billing_products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending"
+    )  # pending | active | expired | refunded | canceled
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    amount_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)  # stripe | jazzcash | easypaisa | manual
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    merchant_txn_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payment_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BoostCheckoutAttempt(Base):
+    """One checkout attempt per redirect (Stripe session or JazzCash/Easypaisa txn)."""
+
+    __tablename__ = "boost_checkout_attempts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer_profiles.id", ondelete="CASCADE"))
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("billing_products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)  # stripe | jazzcash | easypaisa
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="created"
+    )  # created | redirected | paid | failed | expired
+    amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    merchant_txn_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    redirect_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PaymentEvent(Base):
+    """Idempotent payment webhook ledger. Unique provider eventId."""
+
+    __tablename__ = "payment_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

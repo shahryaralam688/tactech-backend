@@ -93,7 +93,7 @@ class SupportService:
                 id=str(uuid4()),
                 conversation_id=conversation.id,
                 sender="system",
-                text="Thanks for contacting TecTach support. Tell us what you need help with.",
+                text="Thanks for contacting TacTech support. Tell us what you need help with.",
                 attachment_url=None,
                 created_at=now,
             )
@@ -116,10 +116,14 @@ class SupportService:
         )
 
     def _message_out(self, message: models.SupportMessage, request: Request) -> SupportMessageOut:
+        sender = message.sender
+        # iOS expects user | support | agent (map legacy system → support)
+        if sender == "system":
+            sender = "support"
         return SupportMessageOut(
             id=message.id,
             conversation_id=message.conversation_id,
-            sender=message.sender,
+            sender=sender,
             text=message.text,
             attachment_url=absolute_media_url(request, self.settings, message.attachment_url),
             created_at=message.created_at,

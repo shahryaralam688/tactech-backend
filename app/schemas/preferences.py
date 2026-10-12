@@ -25,6 +25,9 @@ class NotificationPreferences(APIModel):
     app_update: bool = True
     resources: bool = False
     offers_device: bool = False
+    # TacTech chat / calls (used by server when sending)
+    chat_messages: bool = True
+    chat_calls: bool = True
 
 
 class SecurityPreferences(APIModel):

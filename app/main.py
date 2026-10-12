@@ -2,21 +2,36 @@ from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
+import socketio
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from sqlalchemy import text
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from app.api.routers import auth, catalog, coach, content, me, support, trainee, trainer
+from app.api.routers import (
+    admin_verification,
+    auth,
+    billing,
+    catalog,
+    chat,
+    coach,
+    coaches,
+    content,
+    me,
+    support,
+    trainee,
+    trainer,
+)
 from app.core.config import get_settings
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, RateLimitError
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import create_redis_client
 from app.core.storage import ensure_upload_dir
 from app.db.session import engine
+from app.realtime.chat_hub import sio
 from app.schemas.common import HealthResponse, ReadyResponse
 
 settings = get_settings()
@@ -60,6 +75,10 @@ app.include_router(catalog.router)
 app.include_router(support.router)
 app.include_router(content.router)
 app.include_router(coach.router)
+app.include_router(coaches.router)
+app.include_router(billing.router)
+app.include_router(admin_verification.router)
+app.include_router(chat.router)
 ensure_upload_dir(settings)
 app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
@@ -71,7 +90,12 @@ async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
         content["code"] = exc.code
     if exc.fields:
         content["fields"] = exc.fields
-    return JSONResponse(status_code=exc.status_code, content=content)
+    if getattr(exc, "extra", None):
+        content.update(exc.extra)
+    headers: dict[str, str] = {}
+    if isinstance(exc, RateLimitError):
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(status_code=exc.status_code, content=content, headers=headers or None)
 
 
 @app.middleware("http")
@@ -112,3 +136,9 @@ def ready() -> ReadyResponse:
         logger.exception("redis_unready")
     status = "ok" if postgres_ok and redis_ok else "degraded"
     return ReadyResponse(status=status, postgres=postgres_ok, redis=redis_ok)
+
+
+# Socket.IO at `/socket.io` — connect with auth: { token: <accessJWT> }
+# Events: chat.message, chat.thread.updated, chat.read, chat.typing,
+#          chat.call.incoming, chat.call.ended
+asgi_app = socketio.ASGIApp(sio, other_asgi_app=app)

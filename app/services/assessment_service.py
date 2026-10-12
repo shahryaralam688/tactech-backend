@@ -66,6 +66,11 @@ class AssessmentService:
         )
         self.db.add(assessment)
 
+        if user is not None:
+            from app.services.user_gates import mark_assessment_completed
+
+            mark_assessment_completed(self.db, user)
+
         if trainee.trainer_id:
             self.db.add(
                 models.TrainerFeedback(

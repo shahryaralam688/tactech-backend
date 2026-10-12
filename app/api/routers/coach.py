@@ -4,10 +4,21 @@ import asyncio
 import json
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import Principal, get_coach_service, get_principal, get_settings
+from app.api.deps import (
+    Principal,
+    enforce_coach_chat_rate_limit,
+    enforce_coach_image_rate_limit,
+    enforce_coach_rtc_rate_limit,
+    enforce_coach_voice_rate_limit,
+    get_coach_service,
+    get_principal,
+    get_settings,
+    require_ai_access,
+)
+from app.services.ai_access import AiAccessService
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.security import decode_token
@@ -28,9 +39,10 @@ from app.services.coach_service import CoachService
 
 router = APIRouter(prefix="/coach", tags=["ai-coach"])
 
-# In-memory WebRTC signaling rooms (single-process demo). Use Redis pub/sub for multi-worker later.
+# In-memory WebRTC signaling rooms (single-process). Use Redis pub/sub for multi-worker later.
 _rtc_rooms: dict[str, set[WebSocket]] = {}
 _rtc_lock = asyncio.Lock()
+_RTC_IDLE_SECONDS = 300
 
 
 @router.get("/status", response_model=CoachProviderStatusOut)
@@ -40,7 +52,7 @@ def coach_status(service: Annotated[CoachService, Depends(get_coach_service)]) -
 
 @router.post("/memory/sync", response_model=CoachMemorySyncOut)
 async def sync_memory(
-    principal: Annotated[Principal, Depends(get_principal)],
+    principal: Annotated[Principal, Depends(require_ai_access)],
     service: Annotated[CoachService, Depends(get_coach_service)],
 ) -> CoachMemorySyncOut:
     count = await service.sync_memory(principal)
@@ -63,6 +75,23 @@ def create_conversation(
     return service.create_conversation(principal)
 
 
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_conversation(
+    conversation_id: str,
+    principal: Annotated[Principal, Depends(get_principal)],
+    service: Annotated[CoachService, Depends(get_coach_service)],
+) -> Response:
+    """Delete an AI Coach conversation owned by the current user (cascade messages + media GC)."""
+    closed_sessions = service.delete_conversation(principal, conversation_id)
+    for session_id in closed_sessions:
+        await _hangup_rtc_room(session_id, reason="conversation_deleted")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=list[CoachMessageOut])
 def list_messages(
     conversation_id: str,
@@ -77,8 +106,9 @@ def list_messages(
 async def chat(
     payload: CoachChatRequest,
     request: Request,
-    principal: Annotated[Principal, Depends(get_principal)],
+    principal: Annotated[Principal, Depends(require_ai_access)],
     service: Annotated[CoachService, Depends(get_coach_service)],
+    _: Annotated[None, Depends(enforce_coach_chat_rate_limit)] = None,
 ):
     if payload.stream:
 
@@ -89,11 +119,10 @@ async def chat(
                 ):
                     yield f"data: {chunk}\n\n"
             except AppError as exc:
-                # Response already started (SSE) — send error event instead of raising
                 payload_err = {
                     "event": "error",
                     "detail": exc.message,
-                    "code": exc.code or "AI_ERROR",
+                    "code": exc.code or "INTERNAL",
                     "statusCode": exc.status_code,
                 }
                 yield f"data: {json.dumps(payload_err)}\n\n"
@@ -101,7 +130,7 @@ async def chat(
                 payload_err = {
                     "event": "error",
                     "detail": "AI coach failed unexpectedly. Try again.",
-                    "code": "AI_ERROR",
+                    "code": "INTERNAL",
                     "statusCode": 500,
                 }
                 yield f"data: {json.dumps(payload_err)}\n\n"
@@ -113,26 +142,35 @@ async def chat(
 @router.post("/chat/image", response_model=CoachImageChatResponse, status_code=status.HTTP_201_CREATED)
 async def chat_with_image(
     request: Request,
-    principal: Annotated[Principal, Depends(get_principal)],
+    principal: Annotated[Principal, Depends(require_ai_access)],
     service: Annotated[CoachService, Depends(get_coach_service)],
+    _: Annotated[None, Depends(enforce_coach_image_rate_limit)] = None,
     image: UploadFile = File(...),
     message: str | None = Form(default=None),
+    # iOS multipart uses snake_case; also accept camelCase.
     conversation_id: str | None = Form(default=None),
+    conversationId: str | None = Form(default=None),
 ) -> CoachImageChatResponse:
     """Share a JPEG/PNG photo for AI coaching analysis (form, meal, progress, etc.)."""
-    return await service.chat_with_image(principal, image, message, conversation_id, request)
+    return await service.chat_with_image(
+        principal, image, message, conversation_id or conversationId, request
+    )
 
 
 @router.post("/voice/turn", response_model=CoachVoiceTurnOut)
 async def voice_turn(
     request: Request,
-    principal: Annotated[Principal, Depends(get_principal)],
+    principal: Annotated[Principal, Depends(require_ai_access)],
     service: Annotated[CoachService, Depends(get_coach_service)],
+    _: Annotated[None, Depends(enforce_coach_voice_rate_limit)] = None,
     audio: UploadFile = File(...),
     conversation_id: str | None = Form(default=None),
+    conversationId: str | None = Form(default=None),
     speak: bool = Form(default=True),
 ) -> CoachVoiceTurnOut:
-    return await service.voice_turn(principal, audio, conversation_id, request, speak=speak)
+    return await service.voice_turn(
+        principal, audio, conversation_id or conversationId, request, speak=speak
+    )
 
 
 @router.get("/rtc/ice-servers", response_model=list[CoachRtcIceServer])
@@ -143,11 +181,14 @@ def ice_servers(service: Annotated[CoachService, Depends(get_coach_service)]) ->
 @router.post("/rtc/sessions", response_model=CoachRtcSessionOut, status_code=status.HTTP_201_CREATED)
 def create_rtc_session(
     request: Request,
-    principal: Annotated[Principal, Depends(get_principal)],
+    principal: Annotated[Principal, Depends(require_ai_access)],
     service: Annotated[CoachService, Depends(get_coach_service)],
+    _: Annotated[None, Depends(enforce_coach_rtc_rate_limit)] = None,
+    # iOS uses conversationId; also accept snake_case.
+    conversationId: str | None = Query(default=None),
     conversation_id: str | None = Query(default=None),
 ) -> CoachRtcSessionOut:
-    return service.create_rtc_session(principal, conversation_id, request)
+    return service.create_rtc_session(principal, conversationId or conversation_id, request)
 
 
 @router.get("/rtc/sessions/{session_id}", response_model=CoachRtcSessionOut)
@@ -166,29 +207,36 @@ async def rtc_signaling(
     session_id: str,
     token: str | None = Query(default=None),
 ) -> None:
-    """WebRTC signaling channel: relay offer/answer/ice between peers in a session room.
-
-    Message JSON shapes:
-      {"type":"offer","sdp":"..."}
-      {"type":"answer","sdp":"..."}
-      {"type":"ice","candidate":{...}}
-      {"type":"hangup"}
-      {"type":"voice_hint","text":"..."}  # optional text cue while speaking
-    """
+    """WebRTC signaling: joined / offer / answer / ice / voice_hint / hangup / ping→pong."""
     settings = get_settings()
     await websocket.accept()
     user_id = await _ws_user_id(websocket, settings, token)
     if user_id is None:
+        await websocket.send_json({"type": "error", "detail": "Authentication required.", "code": "UNAUTHORIZED"})
         await websocket.close(code=4401)
         return
 
     db = SessionLocal()
     try:
+        # Creating the RTC session is AI-gated; signaling requires an open owned session.
         repo = CoachRepository(db)
         session = repo.get_rtc_session(session_id, user_id)
         if session is None or session.status != "open":
-            await websocket.send_json({"type": "error", "detail": "RTC session not found."})
+            await websocket.send_json(
+                {"type": "error", "detail": "RTC session not found.", "code": "NOT_FOUND"}
+            )
             await websocket.close(code=4404)
+            return
+        access = AiAccessService(db, settings)
+        if not access.is_entitlement_active(user_id) and access.free_tease_limit() == 0:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "detail": "AI Coach Pro is required to continue.",
+                    "code": "AI_REQUIRED",
+                }
+            )
+            await websocket.close(code=4402)
             return
     finally:
         db.close()
@@ -206,31 +254,72 @@ async def rtc_signaling(
         }
     )
 
+    hangup_reason = "user"
     try:
         while True:
-            raw = await websocket.receive_text()
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=_RTC_IDLE_SECONDS)
+            except asyncio.TimeoutError:
+                hangup_reason = "timeout"
+                await websocket.send_json({"type": "hangup", "reason": hangup_reason})
+                break
             try:
                 payload: dict[str, Any] = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "detail": "Invalid JSON."})
+                await websocket.send_json({"type": "error", "detail": "Invalid JSON.", "code": "VALIDATION_ERROR"})
                 continue
             msg_type = payload.get("type")
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
             if msg_type not in {"offer", "answer", "ice", "hangup", "voice_hint"}:
-                await websocket.send_json({"type": "error", "detail": "Unsupported signal type."})
+                await websocket.send_json(
+                    {"type": "error", "detail": "Unsupported signal type.", "code": "VALIDATION_ERROR"}
+                )
                 continue
             payload["fromUserId"] = user_id
-            await _broadcast(session_id, websocket, payload)
             if msg_type == "hangup":
+                hangup_reason = str(payload.get("reason") or "user")
+                await _broadcast(session_id, websocket, {"type": "hangup", "reason": hangup_reason})
                 break
+            await _broadcast(session_id, websocket, payload)
     except WebSocketDisconnect:
-        pass
+        hangup_reason = "error"
     finally:
+        _close_rtc_session(session_id, user_id)
         async with _rtc_lock:
             room = _rtc_rooms.get(session_id)
             if room and websocket in room:
                 room.remove(websocket)
             if room is not None and not room:
                 _rtc_rooms.pop(session_id, None)
+
+
+def _close_rtc_session(session_id: str, user_id: str) -> None:
+    db = SessionLocal()
+    try:
+        repo = CoachRepository(db)
+        session = repo.get_rtc_session(session_id, user_id)
+        if session is not None and session.status == "open":
+            repo.close_rtc_session(session)
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+
+async def _hangup_rtc_room(session_id: str, *, reason: str = "user") -> None:
+    """Notify signaling peers and drop the in-memory room."""
+    payload = {"type": "hangup", "reason": reason, "sessionId": session_id}
+    async with _rtc_lock:
+        peers = list(_rtc_rooms.get(session_id, set()))
+        _rtc_rooms.pop(session_id, None)
+    for peer in peers:
+        try:
+            await peer.send_json(payload)
+            await peer.close()
+        except Exception:
+            pass
 
 
 async def _broadcast(session_id: str, sender: WebSocket, payload: dict[str, Any]) -> None:

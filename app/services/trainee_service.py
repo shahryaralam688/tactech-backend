@@ -73,6 +73,11 @@ class TraineeService:
             trainee.weight_kg = payload.weight_kg
         if payload.daily_calorie_target is not None:
             trainee.daily_calorie_target = payload.daily_calorie_target
+        user = self.users.get(trainee.user_id)
+        if user is not None:
+            from app.services.user_gates import maybe_mark_onboarding_completed
+
+            maybe_mark_onboarding_completed(self.db, user, trainee=trainee)
         return trainee_out(trainee)
 
     def link_trainer(self, trainee_id: str, invite_code: str) -> TraineeProfileOut:

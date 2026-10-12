@@ -7,8 +7,8 @@ from fastapi import Request, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
-from app.core.exceptions import AppError, NotFoundError, ValidationAppError
-from app.core.storage import absolute_media_url, ensure_upload_dir, public_base, read_image, save_bytes
+from app.core.exceptions import AppError, ForbiddenError, NotFoundError, ValidationAppError
+from app.core.storage import absolute_media_url, delete_stored, ensure_upload_dir, public_base, read_image, save_bytes
 from app.db import models
 from app.repositories.coach import CoachRepository
 from app.schemas.coach import (
@@ -39,19 +39,38 @@ from app.services.ai.providers import (
 if TYPE_CHECKING:
     from app.api.deps import Principal
 
-SYSTEM_PROMPT = """You are TacTech AI Coach — a real human coach chatting inside a fitness app.
+SYSTEM_PROMPT_TRAINER = """You are TacTech AI for a **personal trainer**.
+
+Help with:
+- Writing and refining workout plans
+- Trainee adherence, progress, and form cues
+- Assignment strategy across the roster
+- Professional, concise, actionable coaching tone
 
 How you talk:
-- Sound natural, warm, and clear — like a coach texting a client, not a robot or textbook.
-- Short readable sentences. Everyday words. Light Hinglish/Urdu/English matching the user.
-- 2–5 short sentences or a few simple bullets max. No walls of text.
-- Be specific using MEMORY CONTEXT (their plan, goals, logs, meals, feedback). Use their name/details when useful.
-- Ask at most one short follow-up question when it helps.
+- Natural coach-to-coach chat — clear, warm, short (2–5 sentences or tight bullets).
+- Use MEMORY CONTEXT (roster, plans, logs, feedback). Prefer questions when data is missing.
 - Never invent medical diagnoses. Never dump raw JSON or memory scores.
-- If memory is thin, say so casually and give safe practical advice.
-
-When they share a photo, react like a coach looking at it with them, then give 1–3 concrete tips tied to their context.
+- Match the user's language (Urdu/English/Hinglish) when they use it.
 """
+
+SYSTEM_PROMPT_TRAINEE = """You are TacTech AI for an **athlete / trainee**.
+
+Help with:
+- Today’s workout explanation
+- Form tips tied to their plan
+- Nutrition ideas aligned to their plan/logs when available
+- Motivation without unsafe advice
+
+How you talk:
+- Natural coach-texting-a-client tone — clear, warm, short (2–5 sentences or tight bullets).
+- Use MEMORY CONTEXT (plan, goals, meals, logs). Prefer one clarifying question when data is thin.
+- Never invent medical diagnoses. Never dump raw JSON or memory scores.
+- Soft-redirect medical/emergency topics to a professional.
+- Match the user's language (Urdu/English/Hinglish) when they use it.
+"""
+
+SYSTEM_PROMPT = SYSTEM_PROMPT_TRAINEE  # default fallback
 
 VISION_SYSTEM = """You are TacTech AI Coach looking at a user's photo with them.
 
@@ -61,6 +80,12 @@ Use MEMORY CONTEXT (goal, plan, calories, feedback) when relevant.
 No medical diagnoses. No robotic lists unless a tiny checklist really helps.
 Match the user's language (Urdu/English/Hinglish).
 """
+
+
+def _system_prompt_for_role(role: str) -> str:
+    if role == "trainer":
+        return SYSTEM_PROMPT_TRAINER
+    return SYSTEM_PROMPT_TRAINEE
 
 
 class CoachService:
@@ -94,6 +119,31 @@ class CoachService:
     def create_conversation(self, principal: Principal) -> CoachConversationOut:
         row = self.repo.create_conversation(principal.user_id, principal.role)
         return self._conversation_out(row)
+
+    def delete_conversation(self, principal: Principal, conversation_id: str) -> list[str]:
+        """Hard-delete a coach conversation owned by the JWT user.
+
+        Returns RTC session ids that were closed so the router can signal hangup.
+        """
+        row = self.repo.get_conversation_by_id(conversation_id)
+        if row is None:
+            raise NotFoundError("Chat not found.")
+        if row.user_id != principal.user_id:
+            raise ForbiddenError("You can’t access this chat.")
+
+        # GC conversation-scoped uploads (relative /uploads/... or absolute URLs).
+        for message in self.repo.list_all_messages(row.id):
+            delete_stored(self.settings, message.audio_url)
+            delete_stored(self.settings, message.image_url)
+
+        closed_session_ids: list[str] = []
+        for session in self.repo.list_open_rtc_sessions_for_conversation(row.id, principal.user_id):
+            self.repo.close_rtc_session(session)
+            closed_session_ids.append(session.id)
+
+        # Messages cascade via FK ON DELETE CASCADE.
+        self.repo.delete_conversation(row)
+        return closed_session_ids
 
     def list_messages(
         self, principal: Principal, conversation_id: str, request: Request
@@ -387,7 +437,7 @@ class CoachService:
             f"- {c['content']}" for c in citations
         ) or "- (no saved context yet — keep advice practical and ask one clarifying question)"
         system = (
-            f"{SYSTEM_PROMPT}\n\nUSER ROLE: {principal.role}\n"
+            f"{_system_prompt_for_role(principal.role)}\n\nUSER ROLE: {principal.role}\n"
             f"WHAT YOU KNOW ABOUT THIS USER:\n{memory_block}"
         )
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -405,9 +455,12 @@ class CoachService:
         return self.repo.create_conversation(principal.user_id, principal.role)
 
     def _owned_conversation(self, principal: Principal, conversation_id: str) -> models.CoachConversation:
-        row = self.repo.get_conversation(conversation_id, principal.user_id)
+        """Enforce per-user ownership. Unknown → 404; exists but not owned → 403."""
+        row = self.repo.get_conversation_by_id(conversation_id)
         if row is None:
-            raise NotFoundError("Conversation not found.")
+            raise NotFoundError("Chat not found.")
+        if row.user_id != principal.user_id:
+            raise ForbiddenError("You can’t access this chat.")
         return row
 
     def _conversation_out(self, row: models.CoachConversation) -> CoachConversationOut:

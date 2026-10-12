@@ -39,13 +39,18 @@ class PreferenceService:
         self.feedback = AppFeedbackRepository(db)
 
     def notifications(self, user_id: str) -> NotificationPreferences:
-        return NotificationPreferences.model_validate(self._ensure(user_id).notifications)
+        row = self._ensure(user_id)
+        merged = {**default_notifications(), **(row.notifications or {})}
+        return NotificationPreferences.model_validate(merged)
 
     def save_notifications(self, user_id: str, payload: NotificationPreferences) -> NotificationPreferences:
         row = self._ensure(user_id)
-        row.notifications = payload.model_dump(by_alias=True)
+        # Always persist full object with defaults so all 10 keys survive round-trips.
+        merged = {**default_notifications(), **payload.model_dump(by_alias=True)}
+        saved = NotificationPreferences.model_validate(merged)
+        row.notifications = saved.model_dump(by_alias=True)
         row.updated_at = _utc_now()
-        return NotificationPreferences.model_validate(row.notifications)
+        return saved
 
     def security(self, user_id: str) -> SecurityPreferences:
         return SecurityPreferences.model_validate(self._ensure(user_id).security)

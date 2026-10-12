@@ -4,15 +4,15 @@ from app.schemas.content import AboutOut, AboutSocialOut, FaqItemOut
 class ContentService:
     def about(self) -> AboutOut:
         return AboutOut(
-            brand_name="TecTach",
+            brand_name="TacTech",
             tagline="AI Fitness & Training Solution",
             address_lines=["578 Boolean Ave", "Turing St", "New York, NY"],
             phones=["+123-456-789", "+44-887-449"],
             social=AboutSocialOut(
-                facebook="https://facebook.com/tectach",
-                instagram="https://instagram.com/tectach",
-                linkedin="https://linkedin.com/company/tectach",
-                youtube="https://youtube.com/@tectach",
+                facebook="https://facebook.com/tactech",
+                instagram="https://instagram.com/tactech",
+                linkedin="https://linkedin.com/company/tactech",
+                youtube="https://youtube.com/@tactech",
             ),
         )
 
@@ -20,9 +20,9 @@ class ContentService:
         return [
             FaqItemOut(
                 id="what",
-                question="What is TecTach?",
+                question="What is TacTech?",
                 answer=(
-                    "TecTach is an AI fitness and training app for coaches and athletes. "
+                    "TacTech is an AI fitness and training app for coaches and athletes. "
                     "Trainers program workouts, review nutrition, and coach form. "
                     "Trainees log sessions, meals, and follow assigned plans."
                 ),
@@ -44,5 +44,15 @@ class ContentService:
                     "It builds a weekly training plan from your goals, schedule, and preferences. "
                     "It does not diagnose medical conditions."
                 ),
+            ),
+            FaqItemOut(
+                id="chat",
+                question="How do I message my trainer?",
+                answer="Open Chat from the tab bar. Human chat is separate from the AI Coach.",
+            ),
+            FaqItemOut(
+                id="calories",
+                question="Where do I set my calorie target?",
+                answer="Trainees can update daily calorie target in Profile / Nutrition settings.",
             ),
         ]

@@ -28,7 +28,7 @@ from app.schemas.requests import (
     TrainerAssessmentRequest,
     UpdatePlanRequest,
 )
-from app.schemas.responses import AssignmentResponse, TraineeRosterItem
+from app.schemas.responses import AssignmentResponse, TraineeAnalyticsOut, TraineeRosterItem
 from app.schemas.templates import ExerciseTemplateIn, ExerciseTemplateOut, UpdateExerciseTemplateRequest
 from app.services.template_service import TemplateService
 from app.services.trainer_service import TrainerService
@@ -89,6 +89,17 @@ def trainee_logs(
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> list[WorkoutLogOut]:
     return service.trainee_logs(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
+
+
+@router.get("/trainees/{trainee_id}/analytics", response_model=TraineeAnalyticsOut)
+def trainee_analytics(
+    trainee_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+    period_days: int = Query(default=30, ge=1, le=90),
+) -> TraineeAnalyticsOut:
+    """Workout history rollup for trainer Analytics / History screens."""
+    return service.trainee_analytics(principal.trainer_id, trainee_id, period_days=period_days)  # type: ignore[arg-type]
 
 
 @router.get("/trainees/{trainee_id}/form-reports", response_model=list[FormReportOut])
@@ -222,9 +233,10 @@ def unassign_by_id(
 def unassign_by_query(
     principal: Annotated[Principal, Depends(require_trainer)],
     service: Annotated[TrainerService, Depends(get_trainer_service)],
-    plan_id: str | None = Query(default=None),
-    trainee_id: str | None = Query(default=None),
+    plan_id: str | None = Query(default=None, alias="planId"),
+    trainee_id: str | None = Query(default=None, alias="traineeId"),
 ) -> None:
+    # Also accept snake_case for clients that send it.
     if not plan_id or not trainee_id:
         raise ValidationAppError("Provide planId and traineeId.")
     service.unassign_plan(principal.trainer_id, plan_id=plan_id, trainee_id=trainee_id)  # type: ignore[arg-type]

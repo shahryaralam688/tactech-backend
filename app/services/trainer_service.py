@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -39,7 +39,14 @@ from app.schemas.requests import (
     UpdateTrainerProfileRequest,
     WorkoutExerciseIn,
 )
-from app.schemas.responses import AssignmentResponse, TraineeRosterItem, TrainerPublic
+from app.schemas.responses import (
+    AssignmentResponse,
+    TraineeAnalyticsDay,
+    TraineeAnalyticsOut,
+    TraineeExerciseStat,
+    TraineeRosterItem,
+    TrainerPublic,
+)
 from app.services.access import require_owned_trainee
 
 
@@ -70,6 +77,9 @@ class TrainerService:
             trainer.years_experience = payload.years_experience
         if payload.bio is not None:
             trainer.bio = payload.bio
+        from app.services.user_gates import maybe_mark_onboarding_completed
+
+        maybe_mark_onboarding_completed(self.db, trainer.user, trainer=trainer)
         return TrainerPublic(trainer=trainer_out(trainer), user=user_public(trainer.user))
 
     def list_trainees(self, trainer_id: str) -> list[TraineeRosterItem]:
@@ -133,9 +143,33 @@ class TrainerService:
         return plan_out(loaded or plan)
 
     def update_plan(self, trainer_id: str, plan_id: str, payload: UpdatePlanRequest) -> WorkoutPlanOut:
+        """Full replace of provided fields. iOS sends full PlanBody; assignments stay linked."""
         plan = self.plans.get(plan_id)
         if plan is None or plan.trainer_id != trainer_id:
             raise NotFoundError("Workout plan not found.")
+        # When client sends a full create-shaped body (all core fields + schedule),
+        # reuse create validation path for consistency.
+        data = payload.model_dump(exclude_unset=True)
+        full_replace = all(
+            key in data for key in ("title", "focus", "duration_minutes", "level", "days_per_week")
+        ) and ("days" in data or "exercises" in data)
+        if full_replace:
+            create_shaped = CreatePlanRequest(
+                title=payload.title or plan.title,
+                focus=payload.focus if payload.focus is not None else plan.focus,
+                duration_minutes=payload.duration_minutes or plan.duration_minutes,
+                level=payload.level or plan.level,
+                days_per_week=payload.days_per_week or plan.days_per_week,
+                notes=payload.notes if payload.notes is not None else plan.notes,
+                exercises=payload.exercises or [],
+                days=payload.days or [],
+            )
+            plan.days.clear()
+            plan.exercises.clear()
+            self._apply_plan_payload(plan, create_shaped)
+            loaded = self.plans.get(plan.id)
+            return plan_out(loaded or plan)
+
         if payload.title is not None:
             title = payload.title.strip()
             if not title:
@@ -174,6 +208,7 @@ class TrainerService:
         return plan_out(loaded or plan)
 
     def delete_plan(self, trainer_id: str, plan_id: str) -> None:
+        """Soft-delete plan and clear active assignments. Workout logs are preserved."""
         plan = self.plans.get(plan_id)
         if plan is None or plan.trainer_id != trainer_id:
             raise NotFoundError("Workout plan not found.")
@@ -187,13 +222,17 @@ class TrainerService:
         plan_id: str | None = None,
         trainee_id: str | None = None,
     ) -> None:
+        """Remove active assignment. Idempotent: missing assignment → no-op (204)."""
         assignment = None
         if assignment_id:
             assignment = self.assignments.get(assignment_id)
         elif plan_id and trainee_id:
             assignment = self.assignments.get_by_plan_and_trainee(plan_id, trainee_id)
         if assignment is None:
-            raise NotFoundError("Assignment not found.")
+            # Idempotent DELETE — iOS may retry; still verify roster when ids provided.
+            if trainee_id:
+                require_owned_trainee(self.trainees, trainer_id, trainee_id)
+            return
         require_owned_trainee(self.trainees, trainer_id, assignment.trainee_id)
         plan = self.plans.get(assignment.plan_id, include_deleted=True)
         if plan is not None and plan.trainer_id and plan.trainer_id != trainer_id:
@@ -216,6 +255,9 @@ class TrainerService:
             user.gender = payload.gender.strip() or user.gender
             if payload.bio.strip():
                 user.bio = payload.bio.strip()
+            from app.services.user_gates import mark_assessment_completed
+
+            mark_assessment_completed(self.db, user)
         row = models.TrainerAssessment(
             id=str(uuid4()),
             trainer_id=trainer_id,
@@ -366,6 +408,60 @@ class TrainerService:
     def trainee_logs(self, trainer_id: str, trainee_id: str):
         require_owned_trainee(self.trainees, trainer_id, trainee_id)
         return [workout_log_out(log) for log in self.logs.list_for_trainee(trainee_id)]
+
+    def trainee_analytics(
+        self, trainer_id: str, trainee_id: str, *, period_days: int = 30
+    ) -> TraineeAnalyticsOut:
+        """Aggregate workout history for trainer Analytics / History UI."""
+        require_owned_trainee(self.trainees, trainer_id, trainee_id)
+        period_days = max(1, min(int(period_days or 30), 90))
+        logs = self.logs.list_for_trainee(trainee_id)
+        cutoff = _utc_now() - timedelta(days=period_days)
+
+        def _aware(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        in_period = [log for log in logs if _aware(log.completed_at) >= cutoff]
+        by_day: dict[str, TraineeAnalyticsDay] = {}
+        exercise_stats: dict[str, TraineeExerciseStat] = {}
+        total_duration = 0
+        total_volume = 0.0
+
+        for log in in_period:
+            day_key = _aware(log.completed_at).date().isoformat()
+            bucket = by_day.get(day_key) or TraineeAnalyticsDay(date=day_key)
+            session_volume = 0.0
+            for s in log.sets or []:
+                vol = float(s.reps or 0) * float(s.weight_kg or 0)
+                session_volume += vol
+                ex = exercise_stats.get(s.exercise_id) or TraineeExerciseStat(exercise_id=s.exercise_id)
+                ex.sets += 1
+                ex.reps += int(s.reps or 0)
+                ex.volume_kg += vol
+                exercise_stats[s.exercise_id] = ex
+            bucket.sessions += 1
+            bucket.duration_minutes += int(log.duration_minutes or 0)
+            bucket.volume_kg += session_volume
+            by_day[day_key] = bucket
+            total_duration += int(log.duration_minutes or 0)
+            total_volume += session_volume
+
+        top = sorted(exercise_stats.values(), key=lambda x: x.volume_kg, reverse=True)[:5]
+        days = sorted(by_day.values(), key=lambda d: d.date)
+        last_at = _aware(logs[0].completed_at) if logs else None
+        return TraineeAnalyticsOut(
+            trainee_id=trainee_id,
+            period_days=period_days,
+            sessions_completed=len(in_period),
+            total_duration_minutes=total_duration,
+            total_volume_kg=round(total_volume, 1),
+            last_workout_at=last_at,
+            workouts_by_day=days,
+            top_exercises=top,
+            recent_logs=[workout_log_out(log) for log in logs[:10]],
+        )
 
     def trainee_form_reports(self, trainer_id: str, trainee_id: str):
         require_owned_trainee(self.trainees, trainer_id, trainee_id)

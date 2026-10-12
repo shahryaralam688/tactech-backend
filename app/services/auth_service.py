@@ -16,6 +16,7 @@ from app.repositories.trainee import TraineeRepository
 from app.repositories.user import UserRepository
 from app.schemas.mappers import trainer_out, trainee_out, user_public
 from app.schemas.responses import AuthResponse, MeResponse
+from app.services.user_gates import heal_completion_flags
 
 
 def _utc_now() -> datetime:
@@ -35,6 +36,7 @@ def _make_invite_code(name: str, trainers: TrainerRepository) -> str:
 
 class AuthService:
     def __init__(self, db: Session, redis_client: Redis, settings: Settings) -> None:
+        self.db = db
         self.users = UserRepository(db)
         self.trainers = TrainerRepository(db)
         self.trainees = TraineeRepository(db)
@@ -150,15 +152,30 @@ class AuthService:
         get_logger("tactech.auth").info("password_reset_requested", user_id=user.id)
 
     def me(self, user_id: str) -> MeResponse:
+        from app.schemas.responses import MeAiProBadgeOut
+        from app.services.ai_access import AiAccessService
+
         user = self.users.get_active(user_id)
         if user is None:
             raise UnauthorizedError("User no longer exists.")
+        heal_completion_flags(self.db, user)
         trainer = self.trainers.get_by_user_id(user.id) if user.role == "trainer" else None
         trainee = self.trainees.get_by_user_id(user.id) if user.role == "trainee" else None
+        ai_active = AiAccessService(self.db, self.settings).is_entitlement_active(user_id)
+        ai_pro = MeAiProBadgeOut(
+            active=ai_active,
+            badge_label="Pro" if ai_active else None,
+            badge_full_label="AI Coach Pro" if ai_active else None,
+        )
         return MeResponse(
-            user=user_public(user),
+            user=user_public(user, settings=self.settings),
             trainer=trainer_out(trainer) if trainer else None,
-            trainee=trainee_out(trainee) if trainee else None,
+            trainee=(
+                trainee_out(trainee, gender=user.gender, location=user.location) if trainee else None
+            ),
+            assessment_completed=bool(user.assessment_completed),
+            onboarding_completed=bool(user.onboarding_completed),
+            ai_pro=ai_pro,
         )
 
     def _issue(
@@ -167,6 +184,7 @@ class AuthService:
         trainer: models.TrainerProfile | None,
         trainee: models.TraineeProfile | None,
     ) -> AuthResponse:
+        heal_completion_flags(self.db, user)
         access, _, _ = create_token(
             settings=self.settings,
             user_id=user.id,
@@ -187,7 +205,11 @@ class AuthService:
             access_token=access,
             refresh_token=refresh,
             expires_in=self.settings.access_token_expire_minutes * 60,
-            user=user_public(user),
+            user=user_public(user, settings=self.settings),
             trainer=trainer_out(trainer) if trainer else None,
-            trainee=trainee_out(trainee) if trainee else None,
+            trainee=(
+                trainee_out(trainee, gender=user.gender, location=user.location) if trainee else None
+            ),
+            assessment_completed=bool(user.assessment_completed),
+            onboarding_completed=bool(user.onboarding_completed),
         )

@@ -51,6 +51,35 @@ class CoachRepository:
             return None
         return row
 
+    def get_conversation_by_id(self, conversation_id: str) -> models.CoachConversation | None:
+        return self.db.get(models.CoachConversation, conversation_id)
+
+    def list_all_messages(self, conversation_id: str) -> list[models.CoachMessage]:
+        return list(
+            self.db.scalars(
+                select(models.CoachMessage)
+                .where(models.CoachMessage.conversation_id == conversation_id)
+                .order_by(models.CoachMessage.created_at.asc())
+            ).all()
+        )
+
+    def list_open_rtc_sessions_for_conversation(
+        self, conversation_id: str, user_id: str
+    ) -> list[models.CoachRtcSession]:
+        return list(
+            self.db.scalars(
+                select(models.CoachRtcSession).where(
+                    models.CoachRtcSession.conversation_id == conversation_id,
+                    models.CoachRtcSession.user_id == user_id,
+                    models.CoachRtcSession.status == "open",
+                )
+            ).all()
+        )
+
+    def delete_conversation(self, conversation: models.CoachConversation) -> None:
+        self.db.delete(conversation)
+        self.db.commit()
+
     def create_conversation(self, user_id: str, role: str, title: str = "AI Coach") -> models.CoachConversation:
         now = _utcnow()
         row = models.CoachConversation(

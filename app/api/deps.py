@@ -21,6 +21,19 @@ from app.services.support_service import SupportService
 from app.services.template_service import TemplateService
 from app.services.trainee_service import TraineeService
 from app.services.trainer_service import TrainerService
+from app.services.push_service import PushService
+from app.services.ai_access import AiAccessService
+from app.services.ai_billing_service import AiBillingService
+from app.services.billing_service import BillingService
+from app.services.discovery_service import DiscoveryService
+from app.services.entitlement_service import EntitlementService
+from app.services.review_service import ReviewService
+from app.services.analytics_service import AnalyticsService
+from app.services.sandow_service import SandowService
+from app.services.verification_service import VerificationService
+from app.services.package_service import PackageService
+from app.services.follow_service import FollowService
+from app.realtime.chat_hub import chat_hub
 
 Role = Literal["trainer", "trainee"]
 
@@ -69,6 +82,10 @@ def get_preference_service(db: Annotated[Session, Depends(get_db)]) -> Preferenc
     return PreferenceService(db)
 
 
+def get_push_service(db: Annotated[Session, Depends(get_db)]) -> PushService:
+    return PushService(db, hub=chat_hub)
+
+
 def get_support_service(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -85,6 +102,76 @@ def get_coach_service(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> CoachService:
     return CoachService(db, settings)
+
+
+def get_entitlement_service(db: Annotated[Session, Depends(get_db)]) -> EntitlementService:
+    return EntitlementService(db)
+
+
+def get_discovery_service(db: Annotated[Session, Depends(get_db)]) -> DiscoveryService:
+    return DiscoveryService(db)
+
+
+def get_review_service(db: Annotated[Session, Depends(get_db)]) -> ReviewService:
+    return ReviewService(db)
+
+
+def get_analytics_service(db: Annotated[Session, Depends(get_db)]) -> AnalyticsService:
+    return AnalyticsService(db)
+
+
+def get_sandow_service(db: Annotated[Session, Depends(get_db)]) -> SandowService:
+    return SandowService(db)
+
+
+def get_verification_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+) -> VerificationService:
+    return VerificationService(db, settings, redis_client)
+
+
+def get_package_service(db: Annotated[Session, Depends(get_db)]) -> PackageService:
+    return PackageService(db)
+
+
+def get_follow_service(db: Annotated[Session, Depends(get_db)]) -> FollowService:
+    return FollowService(db)
+
+
+def require_admin_key(
+    settings: Annotated[Settings, Depends(get_settings)],
+    x_admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+) -> str:
+    """Staging/admin review: header must match ADMIN_API_KEY. Returns reviewer label."""
+    expected = (settings.admin_api_key or "").strip()
+    if not expected:
+        raise ForbiddenError("Admin API is not configured (ADMIN_API_KEY).")
+    if not x_admin_key or x_admin_key.strip() != expected:
+        raise ForbiddenError("Invalid admin key.")
+    return "admin-key"
+
+
+def get_billing_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> BillingService:
+    return BillingService(db, settings)
+
+
+def get_ai_billing_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AiBillingService:
+    return AiBillingService(db, settings)
+
+
+def get_ai_access_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AiAccessService:
+    return AiAccessService(db, settings)
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -136,16 +223,154 @@ def require_trainee(principal: Annotated[Principal, Depends(get_principal)]) -> 
     return principal
 
 
+def require_ai_access(
+    principal: Annotated[Principal, Depends(get_principal)],
+    access: Annotated[AiAccessService, Depends(get_ai_access_service)],
+) -> Principal:
+    """402 AI_REQUIRED when no subscription and no free tease left. Consumes tease if used."""
+    access.assert_ai_access(principal.user_id, consume_tease=True)
+    return principal
+
+
 def enforce_auth_rate_limit(
     redis_client: Annotated[Redis, Depends(get_redis)],
     settings: Annotated[Settings, Depends(get_settings)],
     x_forwarded_for: Annotated[str | None, Header()] = None,
 ) -> None:
     ip = (x_forwarded_for or "local").split(",")[0].strip()
-    allowed = RateLimiter(redis_client).hit(
+    allowed, retry_after = RateLimiter(redis_client).check(
         f"auth:{ip}",
         settings.login_rate_limit,
         settings.login_rate_window_seconds,
     )
     if not allowed:
-        raise RateLimitError()
+        raise RateLimitError(retry_after=retry_after)
+
+
+def _enforce_user_rate_limit(
+    *,
+    redis_client: Redis,
+    settings: Settings,
+    principal: Principal,
+    action: str,
+    limit: int,
+    detail: str,
+) -> None:
+    allowed, retry_after = RateLimiter(redis_client).check(
+        f"{action}:{principal.user_id}",
+        limit,
+        settings.coach_rate_window_seconds,
+    )
+    if not allowed:
+        raise RateLimitError(detail, retry_after=retry_after)
+
+
+def enforce_coach_chat_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    _enforce_user_rate_limit(
+        redis_client=redis_client,
+        settings=settings,
+        principal=principal,
+        action="coach:chat",
+        limit=settings.coach_chat_rate_limit,
+        detail="Too many coach messages. Wait a moment, then try again.",
+    )
+
+
+def enforce_coach_image_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    _enforce_user_rate_limit(
+        redis_client=redis_client,
+        settings=settings,
+        principal=principal,
+        action="coach:image",
+        limit=settings.coach_image_rate_limit,
+        detail="Too many photo analyses. Wait a moment, then try again.",
+    )
+
+
+def enforce_coach_voice_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    _enforce_user_rate_limit(
+        redis_client=redis_client,
+        settings=settings,
+        principal=principal,
+        action="coach:voice",
+        limit=settings.coach_voice_rate_limit,
+        detail="Too many voice turns. Wait a moment, then try again.",
+    )
+
+
+def enforce_coach_rtc_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    _enforce_user_rate_limit(
+        redis_client=redis_client,
+        settings=settings,
+        principal=principal,
+        action="coach:rtc",
+        limit=settings.coach_rtc_rate_limit,
+        detail="Too many call sessions. Wait a moment, then try again.",
+    )
+
+
+def enforce_chat_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    allowed, retry_after = RateLimiter(redis_client).check(
+        f"chat:msg:{principal.user_id}",
+        settings.chat_rate_limit,
+        settings.chat_rate_window_seconds,
+    )
+    if not allowed:
+        raise RateLimitError(
+            "Too many messages. Wait a moment, then try again.",
+            retry_after=retry_after,
+        )
+
+
+def enforce_chat_media_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    allowed, retry_after = RateLimiter(redis_client).check(
+        f"chat:media:{principal.user_id}",
+        settings.chat_media_rate_limit,
+        settings.chat_rate_window_seconds,
+    )
+    if not allowed:
+        raise RateLimitError(
+            "Too many media uploads. Wait a moment, then try again.",
+            retry_after=retry_after,
+        )
+
+
+def enforce_chat_rtc_rate_limit(
+    principal: Annotated[Principal, Depends(get_principal)],
+    redis_client: Annotated[Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    allowed, retry_after = RateLimiter(redis_client).check(
+        f"chat:rtc:{principal.user_id}",
+        settings.chat_rtc_rate_limit,
+        settings.chat_rate_window_seconds,
+    )
+    if not allowed:
+        raise RateLimitError(
+            "Too many call sessions. Wait a moment, then try again.",
+            retry_after=retry_after,
+        )

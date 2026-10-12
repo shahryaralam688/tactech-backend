@@ -38,8 +38,16 @@ class RateLimiter:
         self.client = client
 
     def hit(self, key: str, limit: int, window_seconds: int) -> bool:
+        allowed, _ = self.check(key, limit, window_seconds)
+        return allowed
+
+    def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+        """Increment counter. Returns (allowed, retry_after_seconds)."""
         redis_key = f"ratelimit:{key}"
         current = self.client.incr(redis_key)
         if current == 1:
             self.client.expire(redis_key, window_seconds)
-        return current <= limit
+        ttl = int(self.client.ttl(redis_key) or window_seconds)
+        if ttl < 0:
+            ttl = window_seconds
+        return current <= limit, max(1, ttl)

@@ -97,4 +97,4 @@ echo "API:   http://localhost:8000"
 echo "Ngrok: ngrok http 8000"
 echo "App:   use the https://xxxx.ngrok-free.app URL"
 echo
-exec .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec .venv/bin/uvicorn app.main:asgi_app --host 0.0.0.0 --port 8000

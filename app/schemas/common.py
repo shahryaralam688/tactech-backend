@@ -29,6 +29,8 @@ class UserPublic(APIModel):
     email: str
     role: str
     created_at: datetime
+    avatar_url: str | None = None
+    avatar_asset: str | None = None
 
 
 class TrainerProfileOut(APIModel):
@@ -48,6 +50,8 @@ class TraineeProfileOut(APIModel):
     height_cm: int
     weight_kg: float
     daily_calorie_target: int
+    gender: str | None = None
+    location: str | None = None
 
 
 class ExerciseOut(APIModel):

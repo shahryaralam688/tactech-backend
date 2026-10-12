@@ -30,13 +30,28 @@ WEEKDAY_ORDER = {
 }
 
 
-def user_public(user: models.User) -> UserPublic:
+def user_public(user: models.User, *, request=None, settings=None) -> UserPublic:
+    avatar_url = None
+    if user.avatar_url:
+        if settings is not None:
+            from app.core.storage import absolute_media_url
+
+            avatar_url = absolute_media_url(request, settings, user.avatar_url)
+        else:
+            avatar_url = user.avatar_url
+            # Prefer keeping absolute; leave relative only if already absolute-missing
+            if avatar_url and not (
+                avatar_url.startswith("http://") or avatar_url.startswith("https://")
+            ):
+                avatar_url = avatar_url if avatar_url.startswith("/") else f"/{avatar_url}"
     return UserPublic(
         id=user.id,
         name=user.name,
         email=user.email,
         role=user.role,
         created_at=user.created_at,
+        avatar_url=avatar_url,
+        avatar_asset=user.avatar_asset,
     )
 
 
@@ -44,8 +59,22 @@ def trainer_out(trainer: models.TrainerProfile) -> TrainerProfileOut:
     return TrainerProfileOut.model_validate(trainer)
 
 
-def trainee_out(trainee: models.TraineeProfile) -> TraineeProfileOut:
-    return TraineeProfileOut.model_validate(trainee)
+def trainee_out(
+    trainee: models.TraineeProfile,
+    *,
+    gender: str | None = None,
+    location: str | None = None,
+) -> TraineeProfileOut:
+    out = TraineeProfileOut.model_validate(trainee)
+    # Mirror User personal-info fields when provided (no dedicated trainee columns).
+    if gender is not None or location is not None:
+        return out.model_copy(
+            update={
+                "gender": gender if gender is not None else out.gender,
+                "location": location if location is not None else out.location,
+            }
+        )
+    return out
 
 
 def exercise_out(exercise: models.Exercise) -> ExerciseOut:

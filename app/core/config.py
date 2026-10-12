@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
     max_upload_bytes: int = 5 * 1024 * 1024
     password_reset_expire_minutes: int = 60
+    # Avatar / media CDN (S3-compatible: AWS S3, Cloudflare R2, GCS HMAC).
+    # When bucket is set, custom avatars upload to object storage; otherwise local + PUBLIC_BASE_URL.
+    media_s3_bucket: str = ""
+    media_s3_region: str = "auto"
+    media_s3_endpoint_url: str = ""  # e.g. https://<account>.r2.cloudflarestorage.com
+    media_s3_access_key_id: str = ""
+    media_s3_secret_access_key: str = ""
+    media_cdn_base_url: str = ""  # public HTTPS CDN origin, e.g. https://cdn.tactech.app
+    media_s3_prefix: str = "avatars"
+    default_avatar_asset: str = "Avatar_01_Color"
 
     # AI coach — free defaults: mock (no key) | huggingface | groq | openai
     ai_provider: str = "auto"  # auto | mock | huggingface | groq | openai
@@ -58,6 +68,83 @@ class Settings(BaseSettings):
     groq_vision_model: str = "openai/gpt-oss-20b"
     openai_vision_model: str = "gpt-4o-mini"
     webrtc_stun_urls: str = "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"
+    webrtc_turn_urls: str = ""
+    webrtc_turn_username: str = ""
+    webrtc_turn_credential: str = ""
+
+    # AI coach rate limits (per user, sliding fixed window)
+    coach_chat_rate_limit: int = 30
+    coach_image_rate_limit: int = 10
+    coach_voice_rate_limit: int = 20
+    coach_rtc_rate_limit: int = 10
+    coach_rate_window_seconds: int = 60
+
+    # Human chat
+    chat_message_max_chars: int = 4000
+    chat_upload_max_bytes: int = 8 * 1024 * 1024  # default image
+    chat_image_max_bytes: int = 8 * 1024 * 1024
+    chat_video_max_bytes: int = 50 * 1024 * 1024
+    chat_voice_max_bytes: int = 5 * 1024 * 1024
+    chat_file_max_bytes: int = 15 * 1024 * 1024
+    chat_rate_limit: int = 60
+    chat_media_rate_limit: int = 20
+    chat_rtc_rate_limit: int = 10
+    chat_rate_window_seconds: int = 60
+    chat_rtc_idle_seconds: int = 90
+    chat_rtc_max_seconds: int = 60 * 60
+    chat_edit_window_seconds: int = 15 * 60
+    chat_delete_everyone_seconds: int = 60 * 60
+
+    # Phase 2 — Trainer Boost (Stripe Checkout). Empty = billing routes return clear 400.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_publishable_key: str = ""
+    stripe_success_url: str = "tactech://billing/boost/success?session_id={CHECKOUT_SESSION_ID}"
+    stripe_cancel_url: str = "tactech://billing/boost/cancel"
+    # Seed / staging price ids (override in .env after creating Stripe Prices)
+    stripe_price_boost_7d: str = ""
+    stripe_price_boost_30d: str = ""
+
+    # Phase 3 — Trainee AI (Apple IAP). Empty keys → verify returns clear 400 (tests inject fake).
+    apple_bundle_id: str = ""
+    apple_issuer_id: str = ""
+    apple_key_id: str = ""
+    apple_private_key_p8: str = ""  # PEM contents; use \n for newlines in .env
+    apple_environment: str = "Sandbox"  # Sandbox | Production
+    # 0 = hard paywall (recommended production default); 3 = weekly free tease
+    ai_free_tease_messages_per_week: int = 0
+    # Returned on 402 AI_REQUIRED as productHint for iOS Subscribe CTA
+    ai_product_hint: str = "ai.pro.monthly"
+
+    # APNs (device push). Empty → socket inbox still works; push logged as skipped.
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_bundle_id: str = ""  # defaults to apple_bundle_id when empty
+    apns_private_key_p8: str = ""  # PEM; \n for newlines in .env
+    apns_environment: str = "sandbox"  # sandbox | production
+
+    # Phase 4 — Pakistan local boost wallets (JazzCash / Easypaisa)
+    jazzcash_merchant_id: str = ""
+    jazzcash_password: str = ""
+    jazzcash_integrity_salt: str = ""
+    jazzcash_return_url: str = "tactech://billing/boost/success"
+    jazzcash_ipn_url: str = ""
+    jazzcash_checkout_url: str = "https://sandbox.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/"
+
+    easypaisa_store_id: str = ""
+    easypaisa_hash_key: str = ""
+    easypaisa_return_url: str = "tactech://billing/boost/success"
+    easypaisa_ipn_url: str = ""
+    easypaisa_checkout_url: str = ""
+
+    boost_success_url: str = "tactech://billing/boost/success?attempt_id={ATTEMPT_ID}"
+    boost_cancel_url: str = "tactech://billing/boost/cancel"
+
+    # Phase 7 — coach verification (admin review via X-Admin-Key)
+    admin_api_key: str = ""
+    verify_doc_retention_days: int = 90
+    verify_upload_max_bytes: int = 10 * 1024 * 1024
+    verify_upload_ttl_seconds: int = 3600
 
     @field_validator("jwt_secret")
     @classmethod
