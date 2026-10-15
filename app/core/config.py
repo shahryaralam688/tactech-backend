@@ -116,6 +116,18 @@ class Settings(BaseSettings):
     # Returned on 402 AI_REQUIRED as productHint for iOS Subscribe CTA
     ai_product_hint: str = "ai.pro.monthly"
 
+    # AI Gateway — swappable text + vision stubs (freemium quotas separate from provider)
+    # gemini | groq | openai | auto (gemini→groq→mock)
+    ai_text_provider: str = "auto"
+    gemini_api_key: str = ""
+    gemini_chat_model: str = "gemini-2.0-flash"
+    ai_vision_pose_provider: str = "stub"
+    ai_vision_food_provider: str = "stub"
+    # Free daily AI chat messages without Pro (0 = no daily free; fall back to weekly tease / hard paywall)
+    ai_free_chat_daily_limit: int = 10
+    # Lifetime free structured plan generations for solo trainees (not monthly)
+    ai_free_plan_generations: int = 1
+
     # APNs (device push). Empty → socket inbox still works; push logged as skipped.
     apns_key_id: str = ""
     apns_team_id: str = ""

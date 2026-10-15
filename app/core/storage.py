@@ -48,6 +48,14 @@ WEBP_RIFF = b"RIFF"
 WEBP_WEBP = b"WEBP"
 
 
+FORM3D_TYPES = {
+    "model/fbx": ".fbx",
+    "application/octet-stream": None,  # sniff by filename
+    "model/gltf-binary": ".glb",
+    "model/gltf+json": ".gltf",
+}
+
+
 def ensure_upload_dir(settings: Settings) -> Path:
     root = Path(settings.upload_dir)
     (root / "avatars").mkdir(parents=True, exist_ok=True)
@@ -56,6 +64,7 @@ def ensure_upload_dir(settings: Settings) -> Path:
     (root / "coach" / "images").mkdir(parents=True, exist_ok=True)
     (root / "chat").mkdir(parents=True, exist_ok=True)
     (root / "verify").mkdir(parents=True, exist_ok=True)
+    (root / "form3d").mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -407,6 +416,71 @@ def save_bytes(settings: Settings, relative_dir: str, data: bytes, extension: st
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return f"/uploads/{relative_dir}/{filename}"
+
+
+def save_form3d_asset(
+    settings: Settings,
+    *,
+    filename: str,
+    data: bytes,
+    content_type: str | None,
+) -> tuple[str, str, str]:
+    """Persist Mixamo FBX/GLB for Form Studio. Returns (stored_url_or_path, object_key, content_type)."""
+    if not data:
+        raise ValidationAppError("Choose an FBX or GLB file to upload.")
+    limit = 40 * 1024 * 1024
+    if len(data) > limit:
+        raise FileTooLargeError("Form 3D asset must be 40MB or smaller.")
+
+    name = (filename or "clip.fbx").strip()
+    lower = name.lower()
+    if lower.endswith(".fbx"):
+        ext = ".fbx"
+        ctype = "model/fbx"
+    elif lower.endswith(".glb"):
+        ext = ".glb"
+        ctype = "model/gltf-binary"
+    elif lower.endswith(".gltf"):
+        ext = ".gltf"
+        ctype = "model/gltf+json"
+    else:
+        raise UnsupportedMediaError("Only .fbx, .glb, or .gltf Form Studio assets are allowed.")
+
+    version = int(time.time())
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in Path(name).stem)[:80]
+    key = f"form3d/x_bot/{safe}_v{version}_{uuid4().hex[:8]}{ext}"
+
+    if s3_configured(settings):
+        try:
+            client = _s3_client(settings)
+            client.put_object(
+                Bucket=settings.media_s3_bucket.strip(),
+                Key=key,
+                Body=data,
+                ContentType=ctype,
+                CacheControl="public, max-age=31536000, immutable",
+            )
+            cdn = media_cdn_base(settings)
+            if cdn:
+                return f"{cdn}/{key}", key, ctype
+            endpoint = (settings.media_s3_endpoint_url or "").rstrip("/")
+            bucket = settings.media_s3_bucket.strip()
+            if endpoint:
+                return f"{endpoint}/{bucket}/{key}", key, ctype
+            return f"https://{bucket}.s3.amazonaws.com/{key}", key, ctype
+        except Exception:
+            log.exception("form3d_s3_upload_failed", key=key)
+            raise
+
+    root = ensure_upload_dir(settings)
+    path = root / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    relative = f"/uploads/{key}"
+    base = media_cdn_base(settings)
+    if base:
+        return f"{base}{relative}", key, ctype
+    return relative, key, ctype
 
 
 def delete_stored(settings: Settings, stored: str | None) -> None:

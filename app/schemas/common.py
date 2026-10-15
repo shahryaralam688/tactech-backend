@@ -54,14 +54,55 @@ class TraineeProfileOut(APIModel):
     location: str | None = None
 
 
+class Form3dCameraOut(APIModel):
+    pos: list[float] = Field(default_factory=list)
+    target: list[float] = Field(default_factory=list)
+
+
+class Form3dGuideStepOut(APIModel):
+    focus: str
+    title: str
+    detail: str
+    t: float = 0.0
+    camera: Form3dCameraOut | None = None
+
+
+class Form3dOut(APIModel):
+    """Optional Three.js / Mixamo demo for Form Studio (character: x_bot)."""
+
+    enabled: bool = False
+    clip_id: str | None = None
+    character: str | None = None
+    animation_url: str | None = None
+    cues: list[str] = Field(default_factory=list)
+    guide: list[Form3dGuideStepOut] = Field(default_factory=list)
+    attribution: str | None = None
+
+
 class ExerciseOut(APIModel):
     id: str
     name: str
+    # Legacy fields (unchanged for existing plan/log clients)
     muscle_group: str
     equipment: str
     difficulty: str
     cues: list[str]
     icon: str
+    # Enriched catalog (iOS Form Studio + discovery)
+    category: str | None = None
+    muscles: list[str] = Field(default_factory=list)
+    level: str | None = None
+    # Spec example `equipment: string[]` — exposed as equipmentList to keep legacy string `equipment`
+    equipment_list: list[str] = Field(default_factory=list)
+    instructions: str | None = None
+    common_mistakes: list[str] = Field(default_factory=list)
+    thumbnail_url: str | None = None
+    form3d: Form3dOut = Field(
+        default_factory=Form3dOut,
+        validation_alias=AliasChoices("form3d", "form3D"),
+        serialization_alias="form3d",
+    )
+    updated_at: datetime | None = None
 
 
 class WorkoutExerciseOut(APIModel):
@@ -111,7 +152,9 @@ class PlanDayOut(APIModel):
 
 class WorkoutPlanOut(APIModel):
     id: str
-    trainer_id: str
+    trainer_id: str | None = None
+    source: str = "trainer"  # ai | trainer — iOS hides Edit/Delete unless ai
+    owner_trainee_id: str | None = None
     title: str
     focus: str
     duration_minutes: int

@@ -49,6 +49,17 @@ class AssignmentRepository:
         self.db.delete(assignment)
         self.db.flush()
 
-    def clear_for_plan(self, plan_id: str) -> None:
+    def list_for_plan(self, plan_id: str) -> list[models.PlanAssignment]:
+        stmt = (
+            select(models.PlanAssignment)
+            .options(joinedload(models.PlanAssignment.trainee))
+            .where(models.PlanAssignment.plan_id == plan_id)
+        )
+        return list(self.db.execute(stmt).unique().scalars().all())
+
+    def clear_for_plan(self, plan_id: str) -> list[models.PlanAssignment]:
+        """Delete all assignments for plan. Returns the rows that were cleared (for notify)."""
+        rows = self.list_for_plan(plan_id)
         self.db.execute(delete(models.PlanAssignment).where(models.PlanAssignment.plan_id == plan_id))
         self.db.flush()
+        return rows

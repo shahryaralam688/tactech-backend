@@ -46,6 +46,8 @@ If unset: inbox + Socket still work; server logs `apns_not_configured` once. Inv
 
 Register tokens: `POST /me/push-tokens` `{ token, platform: "ios" }`.
 
+Notification Settings (all 10 toggles + APNs gate): see [NOTIFICATION_PREFS.md](./NOTIFICATION_PREFS.md).
+
 ## AI 402 (Subscribe CTA)
 
 Blocked AI routes return:

@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, status
 
@@ -163,10 +163,11 @@ def get_notification_preferences(
 
 @router.put("/me/preferences/notifications", response_model=NotificationPreferences)
 def put_notification_preferences(
-    payload: NotificationPreferences,
+    payload: dict[str, Any],
     principal: Annotated[Principal, Depends(get_principal)],
     service: Annotated[PreferenceService, Depends(get_preference_service)],
 ) -> NotificationPreferences:
+    """Upsert all 10 notification toggles. Partial body merges with existing/defaults."""
     return service.save_notifications(principal.user_id, payload)
 
 

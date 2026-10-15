@@ -38,12 +38,35 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _reset_trainee_link(user_id: str) -> None:
+    from datetime import datetime, timezone
+
     db = SessionLocal()
     try:
         for row in db.scalars(
             select(models.CoachFollow).where(models.CoachFollow.trainee_user_id == user_id)
         ).all():
             db.delete(row)
+        now = datetime.now(timezone.utc)
+        for row in db.scalars(
+            select(models.JoinRequest).where(
+                models.JoinRequest.trainee_user_id == user_id,
+                models.JoinRequest.status == "pending",
+            )
+        ).all():
+            row.status = "cancelled"
+            row.resolved_at = now
+            row.updated_at = now
+            db.add(row)
+        for row in db.scalars(
+            select(models.TrainerTraineeLink).where(
+                models.TrainerTraineeLink.trainee_user_id == user_id,
+                models.TrainerTraineeLink.status == "active",
+            )
+        ).all():
+            row.status = "ended"
+            row.ended_at = now
+            row.ended_by_user_id = user_id
+            db.add(row)
         trainee = db.scalars(
             select(models.TraineeProfile).where(models.TraineeProfile.user_id == user_id)
         ).first()
@@ -255,12 +278,17 @@ def test_second_coach_while_active_409(client: TestClient, actors: dict) -> None
 
 def test_already_linked_via_invite_same_coach(client: TestClient, actors: dict) -> None:
     _reset_trainee_link(actors["trainee"]["user_id"])
-    linked = client.post(
-        "/trainee/link",
+    pending = client.post(
+        "/trainee/join-requests",
         headers=_auth(actors["trainee"]["token"]),
         json={"inviteCode": "TACT-SARA"},
     )
-    assert linked.status_code == 200, linked.text
+    assert pending.status_code == 201, pending.text
+    accept = client.post(
+        f"/trainer/join-requests/{pending.json()['id']}/accept",
+        headers=_auth(actors["sara"]["token"]),
+    )
+    assert accept.status_code == 200, accept.text
 
     again = client.post(
         "/coaches/cp-sara/follow",

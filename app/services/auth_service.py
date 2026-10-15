@@ -91,19 +91,57 @@ class AuthService:
             )
             self.trainers.add(trainer)
         else:
-            linked = None
-            if invite_code:
-                linked = self.trainers.get_by_invite_code(invite_code)
+            # Never auto-link on signup — invite creates a pending join request only.
             trainee = models.TraineeProfile(
                 id=str(uuid4()),
                 user_id=user.id,
-                trainer_id=linked.id if linked else None,
+                trainer_id=None,
                 goal="Build strength",
                 height_cm=170,
                 weight_kg=70,
                 daily_calorie_target=2200,
             )
             self.trainees.add(trainee)
+            if invite_code:
+                linked = self.trainers.get_by_invite_code(invite_code.strip())
+                if linked is not None:
+                    now = _utc_now()
+                    jr = models.JoinRequest(
+                        id=f"jr_{uuid4().hex[:16]}",
+                        trainee_user_id=user.id,
+                        trainer_user_id=linked.user_id,
+                        trainee_id=trainee.id,
+                        trainer_id=linked.id,
+                        invite_code=(invite_code or "").strip(),
+                        message=None,
+                        status="pending",
+                        created_at=now,
+                        updated_at=now,
+                        resolved_at=None,
+                    )
+                    self.db.add(jr)
+                    try:
+                        from app.realtime.chat_hub import chat_hub
+                        from app.services.push_service import PushService
+
+                        PushService(self.db, hub=chat_hub).notify_inbox_sync(
+                            recipient_user_id=linked.user_id,
+                            notif_type="join_request",
+                            title="New trainee request",
+                            body=f"{normalized_name} wants to join with your invite code.",
+                            data={
+                                "type": "join_request",
+                                "joinRequestId": jr.id,
+                                "traineeUserId": user.id,
+                                "traineeName": normalized_name,
+                            },
+                            commit=True,
+                        )
+                    except Exception:
+                        get_logger("tactech.auth").exception(
+                            "signup_join_request_notify_failed",
+                            join_request_id=jr.id,
+                        )
 
         return self._issue(user, trainer, trainee)
 

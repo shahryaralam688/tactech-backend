@@ -143,7 +143,7 @@ Roster-linked after seed. Staging URL = your deploy / ngrok `PUBLIC_BASE_URL`.
 ## Coach discovery follow / hire (Phase 9)
 
 Free marketplace link — see [COACH_FOLLOWS.md](./COACH_FOLLOWS.md).  
-Accept upserts the same `TraineeProfile.trainer_id` roster link as `POST /trainee/link`. Contact / package inquire remain independent and do not create a roster link.
+Accept upserts the same `TraineeProfile.trainer_id` roster link as a join-request Accept (`POST /trainer/join-requests/{id}/accept`). Invite codes create a pending request first (`POST /trainee/join-requests` / alias `/trainee/link`). Contact / package inquire remain independent and do not create a roster link.
 
 ## Coach (unchanged summary)
 

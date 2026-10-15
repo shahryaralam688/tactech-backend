@@ -7,18 +7,21 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 
+from app.ai.capabilities import AiCapabilitiesOut, build_capabilities
+from app.ai.gateway import AiGateway
 from app.api.deps import (
     Principal,
     enforce_coach_chat_rate_limit,
     enforce_coach_image_rate_limit,
     enforce_coach_rtc_rate_limit,
     enforce_coach_voice_rate_limit,
+    get_ai_program_service,
     get_coach_service,
     get_principal,
     get_settings,
     require_ai_access,
+    require_trainee,
 )
-from app.services.ai_access import AiAccessService
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.security import decode_token
@@ -35,9 +38,21 @@ from app.schemas.coach import (
     CoachRtcSessionOut,
     CoachVoiceTurnOut,
 )
+from app.schemas.common import APIModel, WorkoutPlanOut
+from app.services.ai_program_service import AiProgramService
 from app.services.coach_service import CoachService
 
 router = APIRouter(prefix="/coach", tags=["ai-coach"])
+
+
+class GenerateProgramRequest(APIModel):
+    horizon_days: int = 7
+    notes: str | None = None
+
+
+class WeeklySummaryOut(APIModel):
+    summary: str
+    log_count: int = 0
 
 # In-memory WebRTC signaling rooms (single-process). Use Redis pub/sub for multi-worker later.
 _rtc_rooms: dict[str, set[WebSocket]] = {}
@@ -48,6 +63,76 @@ _RTC_IDLE_SECONDS = 300
 @router.get("/status", response_model=CoachProviderStatusOut)
 def coach_status(service: Annotated[CoachService, Depends(get_coach_service)]) -> CoachProviderStatusOut:
     return service.status()
+
+
+@router.get("/ai/capabilities", response_model=AiCapabilitiesOut)
+def ai_capabilities(
+    principal: Annotated[Principal, Depends(get_principal)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AiCapabilitiesOut:
+    """Authenticated capability map so clients know what AI is live vs stub."""
+    _ = principal
+    return build_capabilities(settings)
+
+
+@router.post("/programs/generate", response_model=WorkoutPlanOut)
+async def generate_program(
+    payload: GenerateProgramRequest,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[AiProgramService, Depends(get_ai_program_service)],
+) -> WorkoutPlanOut:
+    """Solo trainee structured plan (blocked with 409 HAS_TRAINER if linked)."""
+    return await service.generate(
+        principal,
+        horizon_days=payload.horizon_days,
+        notes=payload.notes,
+    )
+
+
+@router.post("/programs/weekly-summary", response_model=WeeklySummaryOut)
+async def weekly_summary(
+    principal: Annotated[Principal, Depends(require_ai_access)],
+    service: Annotated[AiProgramService, Depends(get_ai_program_service)],
+) -> WeeklySummaryOut:
+    """Free: uses same chat quota as /coach/chat. Advanced/Pro: unlimited via entitlement."""
+    raw = await service.weekly_summary(principal)
+    return WeeklySummaryOut(summary=raw["summary"], log_count=raw["logCount"])
+
+
+@router.post("/vision/pose")
+async def vision_pose(
+    principal: Annotated[Principal, Depends(get_principal)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    image: UploadFile = File(...),
+    prompt: str | None = Form(default=None),
+):
+    """Pose AI — stub until paid vision keys exist (501 AI_CAPABILITY_UNAVAILABLE)."""
+    _ = principal
+    data = await image.read()
+    gateway = AiGateway(settings)
+    return await gateway.pose.analyze(
+        image_bytes=data,
+        content_type=image.content_type,
+        prompt=prompt or "",
+    )
+
+
+@router.post("/vision/food")
+async def vision_food(
+    principal: Annotated[Principal, Depends(get_principal)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    image: UploadFile = File(...),
+    prompt: str | None = Form(default=None),
+):
+    """Food scan AI — stub until paid vision keys exist (501 AI_CAPABILITY_UNAVAILABLE)."""
+    _ = principal
+    data = await image.read()
+    gateway = AiGateway(settings)
+    return await gateway.food.analyze(
+        image_bytes=data,
+        content_type=image.content_type,
+        prompt=prompt or "",
+    )
 
 
 @router.post("/memory/sync", response_model=CoachMemorySyncOut)

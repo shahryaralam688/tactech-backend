@@ -1,0 +1,487 @@
+{
+  "character": "x_bot",
+  "attribution": "Mixamo",
+  "notes": "Curated TacTech plan catalog only. clipId maps to bundled FBX / CDN. Cardio rows stay form3d.enabled=false. animationUrl null = iOS may use local clipId fallback until CDN is set.",
+  "exercises": [
+    {
+      "id": "ex-squat",
+      "name": "Barbell Squat",
+      "category": "strength",
+      "muscles": ["Legs", "Glutes", "Core"],
+      "level": "intermediate",
+      "equipmentList": ["barbell"],
+      "instructions": "Brace, sit between the hips, knees track over toes, stand tall at the top.",
+      "commonMistakes": ["Knees caving in", "Rounding the lower back", "Cutting depth"],
+      "mixamoQuery": "Squat",
+      "form3d": {
+        "enabled": true,
+        "clipId": "barbell_squat",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Brace your core", "Knees track over toes", "Full depth"],
+        "guide": [
+          {
+            "focus": "Feet",
+            "title": "Set your stance",
+            "detail": "Feet about shoulder-width, toes slightly out.",
+            "t": 0.05,
+            "camera": { "pos": [-1.4, 1.0, 2.6], "target": [0, 0.8, 0] }
+          },
+          {
+            "focus": "Hips",
+            "title": "Sit between the hips",
+            "detail": "Break at hips and knees together; keep chest tall.",
+            "t": 0.35
+          }
+        ]
+      },
+      "sortOrder": 10
+    },
+    {
+      "id": "ex-pushup",
+      "name": "Push Up",
+      "category": "strength",
+      "muscles": ["Chest", "Triceps", "Core"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Hands under shoulders, rigid plank line, full lockout, controlled descent.",
+      "commonMistakes": ["Hips sagging", "Flaring elbows", "Partial range"],
+      "mixamoQuery": "Push Up",
+      "form3d": {
+        "enabled": true,
+        "clipId": "push_up",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Keep a rigid plank line", "Hands under shoulders"],
+        "guide": [
+          {
+            "focus": "Hands",
+            "title": "Plant your hands",
+            "detail": "Place hands under shoulders, fingers forward.",
+            "t": 0.08,
+            "camera": { "pos": [-1.2, 1.1, 2.4], "target": [0, 0.7, 0] }
+          },
+          {
+            "focus": "Core",
+            "title": "Hold the plank",
+            "detail": "Squeeze glutes and brace so hips do not sag.",
+            "t": 0.4
+          }
+        ]
+      },
+      "sortOrder": 20
+    },
+    {
+      "id": "ex-plank",
+      "name": "Plank",
+      "category": "core",
+      "muscles": ["Core", "Shoulders"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Squeeze glutes, neutral neck, do not sag the hips.",
+      "commonMistakes": ["Hips sagging", "Hips too high", "Holding breath"],
+      "mixamoQuery": "Plank",
+      "form3d": {
+        "enabled": true,
+        "clipId": "plank",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Squeeze glutes", "Neutral neck"],
+        "guide": [
+          {
+            "focus": "Body",
+            "title": "Straight line",
+            "detail": "Ears, shoulders, hips, and ankles in one line.",
+            "t": 0.1
+          }
+        ]
+      },
+      "sortOrder": 30
+    },
+    {
+      "id": "ex-lunge",
+      "name": "Walking Lunge",
+      "category": "strength",
+      "muscles": ["Legs", "Glutes"],
+      "level": "beginner",
+      "equipmentList": ["dumbbell", "bodyweight"],
+      "instructions": "Long stride, front knee stacked, stay tall.",
+      "commonMistakes": ["Front knee collapsing", "Short steps", "Torso leaning"],
+      "mixamoQuery": "Walking Lunge",
+      "form3d": {
+        "enabled": true,
+        "clipId": "walking_lunge",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Long stride", "Front knee stacked"],
+        "guide": [
+          {
+            "focus": "Step",
+            "title": "Step long",
+            "detail": "Take a long stride so the back knee can drop under control.",
+            "t": 0.15
+          }
+        ]
+      },
+      "sortOrder": 40
+    },
+    {
+      "id": "ex-rdl",
+      "name": "Romanian Deadlift",
+      "category": "strength",
+      "muscles": ["Posterior", "Hamstrings", "Glutes"],
+      "level": "intermediate",
+      "equipmentList": ["barbell"],
+      "instructions": "Soft knees, hinge from the hips, bar close, flat back.",
+      "commonMistakes": ["Rounding the back", "Bending knees too much", "Bar drifting forward"],
+      "mixamoQuery": "Romanian Deadlift",
+      "form3d": {
+        "enabled": true,
+        "clipId": "romanian_deadlift",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Hinge from the hips", "Keep the bar close"],
+        "guide": [
+          {
+            "focus": "Hips",
+            "title": "Push hips back",
+            "detail": "Soft knees, long spine, bar stays over mid-foot.",
+            "t": 0.2
+          }
+        ]
+      },
+      "sortOrder": 50
+    },
+    {
+      "id": "ex-hiphinge",
+      "name": "Hip Hinge Drill",
+      "category": "mobility",
+      "muscles": ["Posterior", "Hamstrings"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Push hips back, soft knees, long spine.",
+      "commonMistakes": ["Squatting instead of hinging", "Rounding the back"],
+      "mixamoQuery": "Deadlift",
+      "form3d": {
+        "enabled": true,
+        "clipId": "hip_hinge",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Push hips back", "Long spine"],
+        "guide": [
+          {
+            "focus": "Hips",
+            "title": "Hinge pattern",
+            "detail": "Feel stretch in hamstrings; chest stays over the floor.",
+            "t": 0.25
+          }
+        ]
+      },
+      "sortOrder": 60
+    },
+    {
+      "id": "ex-ohp",
+      "name": "Overhead Press",
+      "category": "strength",
+      "muscles": ["Shoulders", "Triceps", "Core"],
+      "level": "intermediate",
+      "equipmentList": ["barbell"],
+      "instructions": "Glutes tight, press up and slightly back, do not flare ribs.",
+      "commonMistakes": ["Excessive lean back", "Flaring ribs", "Partial lockout"],
+      "mixamoQuery": "Shoulder Press",
+      "form3d": {
+        "enabled": false,
+        "clipId": "shoulder_press",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Glutes tight", "Do not flare ribs"],
+        "guide": []
+      },
+      "sortOrder": 70
+    },
+    {
+      "id": "ex-row",
+      "name": "Bent Over Row",
+      "category": "strength",
+      "muscles": ["Back", "Biceps"],
+      "level": "intermediate",
+      "equipmentList": ["dumbbell"],
+      "instructions": "Hinge and hold, pull to the hip, squeeze the shoulder blades.",
+      "commonMistakes": ["Using momentum", "Shrugging", "Rounding the back"],
+      "mixamoQuery": "Bent Over Row",
+      "form3d": {
+        "enabled": false,
+        "clipId": "bent_over_row",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Pull to the hip", "Squeeze the shoulder blades"],
+        "guide": []
+      },
+      "sortOrder": 80
+    },
+    {
+      "id": "ex-hiit",
+      "name": "Bike Sprint",
+      "category": "cardio",
+      "muscles": ["Conditioning", "Legs"],
+      "level": "advanced",
+      "equipmentList": ["bike"],
+      "instructions": "Smooth cadence, upright torso, recover with control.",
+      "commonMistakes": ["Slamming resistance", "Rounding the back"],
+      "mixamoQuery": null,
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 90
+    },
+    {
+      "id": "ex-ai-bird-dog",
+      "name": "Bird Dog",
+      "category": "core",
+      "muscles": ["Core", "Glutes"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Opposite arm and leg reach; keep hips level.",
+      "commonMistakes": ["Arching the low back", "Rushing reps"],
+      "mixamoQuery": "Bird Dog",
+      "form3d": {
+        "enabled": false,
+        "clipId": "bird_dog",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Hips level", "Long reach"],
+        "guide": []
+      },
+      "sortOrder": 100
+    },
+    {
+      "id": "ex-ai-cat-cow",
+      "name": "Cat Cow",
+      "category": "mobility",
+      "muscles": ["Mobility", "Core"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Alternate spinal flexion and extension with the breath.",
+      "commonMistakes": ["Forcing end range", "Holding breath"],
+      "mixamoQuery": "Cat Cow",
+      "form3d": {
+        "enabled": false,
+        "clipId": "cat_cow",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Move with breath"],
+        "guide": []
+      },
+      "sortOrder": 110
+    },
+    {
+      "id": "ex-ai-chest-pr",
+      "name": "Chest Press Machine",
+      "category": "strength",
+      "muscles": ["Chest", "Triceps"],
+      "level": "beginner",
+      "equipmentList": ["machine"],
+      "instructions": "Control the press and return; do not lock out aggressively.",
+      "commonMistakes": ["Shrugging", "Bouncing the stack"],
+      "mixamoQuery": "Chest Press",
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 120
+    },
+    {
+      "id": "ex-ai-dead-bug",
+      "name": "Dead Bug",
+      "category": "core",
+      "muscles": ["Core"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Low back pressed down; opposite arm and leg move slowly.",
+      "commonMistakes": ["Arching the low back", "Moving too fast"],
+      "mixamoQuery": "Dead Bug",
+      "form3d": {
+        "enabled": false,
+        "clipId": "dead_bug",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Low back down"],
+        "guide": []
+      },
+      "sortOrder": 130
+    },
+    {
+      "id": "ex-ai-easy-wal",
+      "name": "Easy Walk",
+      "category": "cardio",
+      "muscles": ["Conditioning"],
+      "level": "beginner",
+      "equipmentList": ["none"],
+      "instructions": "Easy conversational pace; relaxed shoulders.",
+      "commonMistakes": ["Overstriding"],
+      "mixamoQuery": null,
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 140
+    },
+    {
+      "id": "ex-ai-glute-br",
+      "name": "Glute Bridge",
+      "category": "strength",
+      "muscles": ["Glutes", "Hamstrings"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Drive through heels, squeeze glutes at the top, avoid overarching.",
+      "commonMistakes": ["Pushing through toes", "Overarching lumbar"],
+      "mixamoQuery": "Bridge",
+      "form3d": {
+        "enabled": false,
+        "clipId": "glute_bridge",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Squeeze glutes at the top"],
+        "guide": []
+      },
+      "sortOrder": 150
+    },
+    {
+      "id": "ex-ai-goblet-b",
+      "name": "Goblet Box Squat",
+      "category": "strength",
+      "muscles": ["Legs", "Glutes"],
+      "level": "beginner",
+      "equipmentList": ["dumbbell"],
+      "instructions": "Sit to the box with control, then stand tall.",
+      "commonMistakes": ["Collapsing knees", "Dropping onto the box"],
+      "mixamoQuery": "Goblet Squat",
+      "form3d": {
+        "enabled": false,
+        "clipId": "goblet_squat",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Control to the box"],
+        "guide": []
+      },
+      "sortOrder": 160
+    },
+    {
+      "id": "ex-ai-goblet-s",
+      "name": "Goblet Squat",
+      "category": "strength",
+      "muscles": ["Legs", "Glutes", "Core"],
+      "level": "beginner",
+      "equipmentList": ["dumbbell"],
+      "instructions": "Hold dumbbell at chest, elbows down, squat with upright torso.",
+      "commonMistakes": ["Heels lifting", "Torso collapsing forward"],
+      "mixamoQuery": "Goblet Squat",
+      "form3d": {
+        "enabled": false,
+        "clipId": "goblet_squat",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Elbows down", "Upright torso"],
+        "guide": []
+      },
+      "sortOrder": 170
+    },
+    {
+      "id": "ex-ai-hiking-i",
+      "name": "Hiking Intervals",
+      "category": "cardio",
+      "muscles": ["Conditioning", "Legs"],
+      "level": "intermediate",
+      "equipmentList": ["none"],
+      "instructions": "Alternate brisk hiking efforts with easy recovery.",
+      "commonMistakes": ["Starting too hard"],
+      "mixamoQuery": null,
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 180
+    },
+    {
+      "id": "ex-ai-seated-r",
+      "name": "Seated Row",
+      "category": "strength",
+      "muscles": ["Back", "Biceps"],
+      "level": "beginner",
+      "equipmentList": ["machine"],
+      "instructions": "Pull to the ribs, squeeze blades, control the return.",
+      "commonMistakes": ["Shrugging", "Using momentum"],
+      "mixamoQuery": "Seated Row",
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 190
+    },
+    {
+      "id": "ex-ai-seated-s",
+      "name": "Seated Shoulder Press",
+      "category": "strength",
+      "muscles": ["Shoulders", "Triceps"],
+      "level": "beginner",
+      "equipmentList": ["dumbbell"],
+      "instructions": "Press overhead without flaring ribs; control the descent.",
+      "commonMistakes": ["Excessive arch", "Partial lockout"],
+      "mixamoQuery": "Shoulder Press",
+      "form3d": {
+        "enabled": false,
+        "clipId": "shoulder_press",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": [],
+        "guide": []
+      },
+      "sortOrder": 200
+    },
+    {
+      "id": "ex-ai-sit-to-s",
+      "name": "Sit to Stand",
+      "category": "strength",
+      "muscles": ["Legs", "Glutes"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Stand from a seat without using hands if possible; sit with control.",
+      "commonMistakes": ["Falling onto the seat", "Knees caving"],
+      "mixamoQuery": "Sit to Stand",
+      "form3d": {
+        "enabled": false,
+        "clipId": "sit_to_stand",
+        "character": "x_bot",
+        "animationUrl": null,
+        "cues": ["Control the sit"],
+        "guide": []
+      },
+      "sortOrder": 210
+    },
+    {
+      "id": "ex-ai-sun-brea",
+      "name": "Sun Breath Flow",
+      "category": "mobility",
+      "muscles": ["Mobility"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Slow mobility flow linked to breathing.",
+      "commonMistakes": ["Rushing"],
+      "mixamoQuery": "Yoga",
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 220
+    },
+    {
+      "id": "ex-ai-world-s-",
+      "name": "World's Greatest Stretch",
+      "category": "mobility",
+      "muscles": ["Mobility", "Hips"],
+      "level": "beginner",
+      "equipmentList": ["bodyweight"],
+      "instructions": "Lunge, rotate open, keep hips square as you reach.",
+      "commonMistakes": ["Collapsing the front knee"],
+      "mixamoQuery": "World Greatest Stretch",
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 230
+    },
+    {
+      "id": "ex-ai-zone-2-b",
+      "name": "Zone 2 Bike",
+      "category": "cardio",
+      "muscles": ["Conditioning"],
+      "level": "beginner",
+      "equipmentList": ["bike"],
+      "instructions": "Steady aerobic effort you can talk through.",
+      "commonMistakes": ["Pushing into zone 3+"],
+      "mixamoQuery": null,
+      "form3d": { "enabled": false, "clipId": null, "animationUrl": null, "cues": [], "guide": [] },
+      "sortOrder": 240
+    }
+  ]
+}

@@ -593,32 +593,21 @@ def ensure_verification_qa(db) -> int:
     return 1
 
 
-# Staging QA reviews (Phase 5). Idempotent by deterministic ids.
+# Staging QA reviews — only authors currently on that coach's roster (roster-only policy).
 REVIEW_SEEDS = [
-    # Maya — strong ratings
+    # Maya roster: jordan, priya, marcus, elena
     ("rev-maya-jordan", "cp-maya", "trainer-maya", "user-jordan", "trainee-jordan", 5, "Maya's programming is clear and progressive."),
     ("rev-maya-priya", "cp-maya", "trainer-maya", "user-priya", "trainee-priya", 5, "Very responsive and form cues are excellent."),
     ("rev-maya-marcus", "cp-maya", "trainer-maya", "user-marcus", "trainee-marcus", 4, "Solid strength block. Would like more video demos."),
-    # Ali
-    ("rev-ali-jordan", "cp-ali", "trainer-ali", "user-jordan", "trainee-jordan", 4, "Great hypertrophy focus for busy schedules."),
-    ("rev-ali-elena", "cp-ali", "trainer-ali", "user-elena", "trainee-elena", 5, "Loved the online check-ins."),
-    ("rev-ali-priya", "cp-ali", "trainer-ali", "user-priya", "trainee-priya", 3, "Good coach, chat was a bit slow some weeks."),
-    # Sara
-    ("rev-sara-marcus", "cp-sara", "trainer-sara", "user-marcus", "trainee-marcus", 5, "Fat-loss plan actually stuck. Highly recommend."),
-    ("rev-sara-elena", "cp-sara", "trainer-sara", "user-elena", "trainee-elena", 4, "Conditioning sessions are tough but fair."),
-    ("rev-sara-jordan", "cp-sara", "trainer-sara", "user-jordan", "trainee-jordan", 4, None),
-    # Omar
-    ("rev-omar-elena", "cp-omar", "trainer-omar", "user-elena", "trainee-elena", 5, "Best mobility coach I've worked with."),
-    ("rev-omar-priya", "cp-omar", "trainer-omar", "user-priya", "trainee-priya", 4, "Rehab-aware and patient."),
-    ("rev-omar-marcus", "cp-omar", "trainer-omar", "user-marcus", "trainee-marcus", 2, "Not the right fit for my strength goals."),
+    ("rev-maya-elena", "cp-maya", "trainer-maya", "user-elena", "trainee-elena", 5, "Rehab-aware and patient."),
 ]
 
 
 def ensure_coach_reviews(db) -> int:
-    """Upsert staging reviews and recompute coach_profiles aggregates."""
+    """Upsert roster-eligible staging reviews; purge orphans; recompute aggregates."""
     from decimal import Decimal
 
-    from sqlalchemy import func
+    from sqlalchemy import delete, func
 
     now = datetime.now(timezone.utc)
     touched = 0
@@ -627,9 +616,12 @@ def ensure_coach_reviews(db) -> int:
             continue
         if db.get(models.User, uid) is None:
             continue
+        # Only seed if author is currently on this coach's roster
+        trainee = db.get(models.TraineeProfile, trainee_id)
+        if trainee is None or trainee.trainer_id != tid:
+            continue
         row = db.get(models.CoachReview, rid)
         if row is None:
-            # Skip if another review already exists for this author↔coach
             existing = db.scalars(
                 select(models.CoachReview).where(
                     models.CoachReview.author_user_id == uid,
@@ -643,7 +635,7 @@ def ensure_coach_reviews(db) -> int:
                 coach_profile_id=cpid,
                 trainer_id=tid,
                 author_user_id=uid,
-                author_trainee_id=trainee_id if db.get(models.TraineeProfile, trainee_id) else None,
+                author_trainee_id=trainee_id,
                 stars=stars,
                 body=body,
                 is_hidden=False,
@@ -660,8 +652,38 @@ def ensure_coach_reviews(db) -> int:
             touched += 1
 
     db.flush()
-    # Recompute aggregates for all seeded coach profiles
-    for cpid in {item[1] for item in REVIEW_SEEDS}:
+
+    # Drop reviews whose author was never this coach's trainee (current or link history)
+    to_delete: list[str] = []
+    for rev in db.scalars(select(models.CoachReview)).all():
+        cp = db.get(models.CoachProfile, rev.coach_profile_id)
+        if cp is None:
+            to_delete.append(rev.id)
+            continue
+        on_roster = db.scalars(
+            select(models.TraineeProfile.id).where(
+                models.TraineeProfile.user_id == rev.author_user_id,
+                models.TraineeProfile.trainer_id == cp.trainer_id,
+            )
+        ).first()
+        if on_roster:
+            continue
+        ever = db.scalars(
+            select(models.TrainerTraineeLink.id).where(
+                models.TrainerTraineeLink.trainee_user_id == rev.author_user_id,
+                models.TrainerTraineeLink.trainer_id == cp.trainer_id,
+            )
+        ).first()
+        if ever is None:
+            to_delete.append(rev.id)
+    if to_delete:
+        db.execute(delete(models.CoachReview).where(models.CoachReview.id.in_(to_delete)))
+        touched += len(to_delete)
+    db.flush()
+
+    # Recompute aggregates for all coach profiles
+    profile_ids = set(db.scalars(select(models.CoachProfile.id)).all())
+    for cpid in profile_ids:
         profile = db.get(models.CoachProfile, cpid)
         if profile is None:
             continue

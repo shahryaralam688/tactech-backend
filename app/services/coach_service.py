@@ -22,13 +22,12 @@ from app.schemas.coach import (
     CoachVoiceTurnOut,
 )
 from app.services.ai.memory import CoachMemoryService
+from app.ai.gateway import AiGateway
 from app.services.ai.providers import (
-    ChatProvider,
     EmbeddingProvider,
     STTProvider,
     TTSProvider,
     VisionProvider,
-    build_chat_provider,
     build_embedding_provider,
     build_stt_provider,
     build_tts_provider,
@@ -94,7 +93,9 @@ class CoachService:
         self.settings = settings
         self.repo = CoachRepository(db)
         self.embedder: EmbeddingProvider = build_embedding_provider(settings)
-        self.chat_provider: ChatProvider = build_chat_provider(settings)
+        # Text chat goes through AI Gateway (gemini/groq/openai/mock) — SSE contract unchanged
+        self._gateway = AiGateway(settings)
+        self.chat_provider = self._gateway.as_chat_provider()
         self.vision_provider: VisionProvider = build_vision_provider(settings)
         self.stt: STTProvider = build_stt_provider(settings)
         self.tts: TTSProvider = build_tts_provider(settings)
@@ -102,13 +103,20 @@ class CoachService:
 
     def status(self) -> CoachProviderStatusOut:
         raw = provider_status(self.settings)
+        text_name = self._gateway.text_provider_name
+        chat_model = {
+            "gemini": self.settings.gemini_chat_model,
+            "groq": self.settings.groq_chat_model,
+            "openai": self.settings.openai_chat_model,
+            "mock": "local-mock-rag",
+        }.get(text_name, raw["chatModel"])
         return CoachProviderStatusOut(
-            provider=raw["provider"],
-            chat_configured=raw["chatConfigured"],
-            using_mock_fallback=raw.get("usingMockFallback", False),
+            provider=text_name if text_name != "unconfigured" else raw["provider"],
+            chat_configured=text_name != "unconfigured",
+            using_mock_fallback=text_name == "mock",
             tts_provider=raw["ttsProvider"],
             embedding=raw["embedding"],
-            chat_model=raw["chatModel"],
+            chat_model=chat_model,
             vision_model=raw.get("visionModel"),
             supports_images=bool(raw.get("supportsImages", True)),
         )

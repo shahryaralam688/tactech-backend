@@ -56,22 +56,25 @@ def test_register_and_list_push_token(client: TestClient, tokens: dict[str, str]
     assert any(t["id"] == body["id"] for t in listed.json())
 
 
+_PREF_KEYS = (
+    "push",
+    "aiCoach",
+    "metrics",
+    "vibrations",
+    "sound",
+    "appUpdate",
+    "resources",
+    "offersDevice",
+    "chatMessages",
+    "chatCalls",
+)
+
+
 def test_notification_prefs_include_chat_flags(client: TestClient, tokens: dict[str, str]) -> None:
     prefs = client.get("/me/preferences/notifications", headers=_auth(tokens["trainer"]))
     assert prefs.status_code == 200
     data = prefs.json()
-    for key in (
-        "push",
-        "aiCoach",
-        "metrics",
-        "vibrations",
-        "sound",
-        "appUpdate",
-        "resources",
-        "offersDevice",
-        "chatMessages",
-        "chatCalls",
-    ):
+    for key in _PREF_KEYS:
         assert key in data
         assert isinstance(data[key], bool)
 
@@ -89,6 +92,74 @@ def test_notification_prefs_include_chat_flags(client: TestClient, tokens: dict[
     assert put.json()["chatMessages"] is False
     again = client.get("/me/preferences/notifications", headers=_auth(tokens["trainer"]))
     assert again.json()["chatMessages"] is False
+
+
+def test_notification_prefs_partial_put_and_all_toggles(client: TestClient, tokens: dict[str, str]) -> None:
+    # Reset to known baseline
+    base = {k: True for k in _PREF_KEYS}
+    base["aiCoach"] = False
+    base["resources"] = False
+    base["offersDevice"] = False
+    base["vibrations"] = False
+    saved = client.put(
+        "/me/preferences/notifications",
+        headers=_auth(tokens["trainer"]),
+        json=base,
+    )
+    assert saved.status_code == 200, saved.text
+
+    # Partial: flip metrics + vibrations only
+    patch = client.put(
+        "/me/preferences/notifications",
+        headers=_auth(tokens["trainer"]),
+        json={"metrics": False, "vibrations": True},
+    )
+    assert patch.status_code == 200
+    body = patch.json()
+    assert body["metrics"] is False
+    assert body["vibrations"] is True
+    assert body["chatMessages"] is True  # preserved
+    assert body["push"] is True
+
+    again = client.get("/me/preferences/notifications", headers=_auth(tokens["trainer"]))
+    assert again.json() == body
+    for key in _PREF_KEYS:
+        assert key in again.json()
+
+
+def test_push_gate_matrix() -> None:
+    from app.schemas.preferences import NotificationPreferences
+    from app.services.push_service import PushService
+
+    def gate(**overrides) -> NotificationPreferences:
+        data = NotificationPreferences().model_dump()
+        data.update(overrides)
+        return NotificationPreferences.model_validate(data)
+
+    # Master off → nothing
+    off = gate(push=False)
+    for t in ("chat", "chat_call", "plan_assigned", "join_request", "relationship_ended"):
+        assert PushService._should_send_push(off, t) is False
+
+    # Type gates
+    assert PushService._should_send_push(gate(chat_messages=False), "chat") is False
+    assert PushService._should_send_push(gate(chat_calls=False), "chat_call") is False
+    assert PushService._should_send_push(gate(ai_coach=False), "ai_coach") is False
+    assert PushService._should_send_push(gate(metrics=False), "metrics") is False
+    assert PushService._should_send_push(gate(metrics=False), "workout") is False
+    assert PushService._should_send_push(gate(metrics=False), "plan_assigned") is False
+    assert PushService._should_send_push(gate(metrics=False), "plan_unassigned") is False
+    assert PushService._should_send_push(gate(metrics=False), "plan_updated") is False
+    assert PushService._should_send_push(gate(app_update=False), "app_update") is False
+    assert PushService._should_send_push(gate(resources=False), "resources") is False
+    assert PushService._should_send_push(gate(offers_device=False), "offers") is False
+
+    # Master-only coaching types still send when push on
+    assert PushService._should_send_push(gate(metrics=False), "join_request") is True
+    assert PushService._should_send_push(gate(metrics=False), "relationship_ended") is True
+
+    # vibrations/sound unused by gate
+    assert PushService._should_send_push(gate(vibrations=False, sound=False), "chat") is True
 
 
 def test_chat_messages_pref_false_still_creates_inbox_no_apns_queue(

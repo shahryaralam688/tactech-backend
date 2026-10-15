@@ -74,6 +74,14 @@ class ChatHub:
     async def emit_notification(self, user_id: str, payload: dict[str, Any]) -> None:
         await self._emit_to_user(user_id, "notification.created", payload)
 
+    async def emit_relationship_changed(self, user_id: str, payload: dict[str, Any]) -> None:
+        """Domain event for roster / My Trainer refresh (room user:{userId}, / + /chat)."""
+        await self._emit_to_user(user_id, "relationship.changed", payload)
+
+    async def emit_plan_assignment_changed(self, user_id: str, payload: dict[str, Any]) -> None:
+        """Domain event for assigned-plan refresh (room user:{userId}, / + /chat)."""
+        await self._emit_to_user(user_id, "plan.assignment.changed", payload)
+
     async def emit_to_thread(self, thread_id: str, event: str, payload: dict[str, Any]) -> None:
         room = f"chat:{thread_id}"
         for namespace in ("/", CHAT_NS):

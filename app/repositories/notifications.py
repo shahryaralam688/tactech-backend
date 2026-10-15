@@ -23,6 +23,7 @@ class NotificationRepository:
         title: str,
         body: str,
         data: dict | None = None,
+        commit: bool = True,
     ) -> models.AppNotification:
         row = models.AppNotification(
             id=str(uuid4()),
@@ -35,9 +36,30 @@ class NotificationRepository:
             created_at=_utcnow(),
         )
         self.db.add(row)
-        self.db.commit()
-        self.db.refresh(row)
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(row)
         return row
+
+    def create_flush(
+        self,
+        *,
+        user_id: str,
+        type: str,
+        title: str,
+        body: str,
+        data: dict | None = None,
+    ) -> models.AppNotification:
+        """Insert inbox row without committing (caller / get_db owns the transaction)."""
+        return self.create(
+            user_id=user_id,
+            type=type,
+            title=title,
+            body=body,
+            data=data,
+            commit=False,
+        )
 
     def list_for_user(
         self,

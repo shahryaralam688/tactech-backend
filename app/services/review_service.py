@@ -1,13 +1,14 @@
-"""Coach reviews & ratings (Phase 5).
+"""Coach reviews & ratings.
 
-Eligibility (Option A): trainee may review if coach isPublic OR invite-linked
-to that trainer. No chat-thread requirement. No payment required.
+Write eligibility: only a trainee currently linked (active roster) to that coach
+may create / update / delete. Historical reviews stay visible after leave/remove.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,52 @@ if TYPE_CHECKING:
 
 log = get_logger("tactech.reviews")
 
+EligibilityReason = Literal["OK", "NOT_TRAINEE_ROLE", "NOT_ROSTERED", "IS_SELF"]
+
+
+def is_currently_rostered_for_coach(
+    db: Session, *, trainee_user_id: str, trainee_id: str | None, coach: models.CoachProfile
+) -> bool:
+    """True iff trainee has an active invite/roster link to this coach's trainer."""
+    if not trainee_id:
+        return False
+    trainee = db.get(models.TraineeProfile, trainee_id)
+    if trainee is None or trainee.user_id != trainee_user_id:
+        return False
+    if trainee.trainer_id == coach.trainer_id:
+        return True
+    # Durable active link row (covers pointer lag)
+    active = db.scalars(
+        select(models.TrainerTraineeLink)
+        .where(
+            models.TrainerTraineeLink.trainee_id == trainee.id,
+            models.TrainerTraineeLink.trainer_id == coach.trainer_id,
+            models.TrainerTraineeLink.status == "active",
+        )
+        .limit(1)
+    ).first()
+    return active is not None
+
+
+def author_was_ever_linked_to_coach(
+    db: Session, *, author_user_id: str, coach: models.CoachProfile
+) -> bool:
+    """Historical or current roster link — used for cleanup / eligible visibility."""
+    trainee = db.scalars(
+        select(models.TraineeProfile).where(models.TraineeProfile.user_id == author_user_id)
+    ).first()
+    if trainee is not None and trainee.trainer_id == coach.trainer_id:
+        return True
+    link = db.scalars(
+        select(models.TrainerTraineeLink)
+        .where(
+            models.TrainerTraineeLink.trainee_user_id == author_user_id,
+            models.TrainerTraineeLink.trainer_id == coach.trainer_id,
+        )
+        .limit(1)
+    ).first()
+    return link is not None
+
 
 class ReviewService:
     def __init__(self, db: Session) -> None:
@@ -45,8 +92,7 @@ class ReviewService:
     def create(
         self, principal: Principal, coach_profile_id: str, payload: CoachReviewCreateRequest
     ) -> CoachReviewOut:
-        self._require_trainee(principal)
-        profile = self._reviewable_profile(principal, coach_profile_id)
+        profile = self._require_eligible_writer(principal, coach_profile_id)
         stars, body = self._validate_payload(payload)
 
         existing = self.reviews.get_by_author_coach(
@@ -89,10 +135,7 @@ class ReviewService:
     def update_mine(
         self, principal: Principal, coach_profile_id: str, payload: CoachReviewCreateRequest
     ) -> CoachReviewOut:
-        self._require_trainee(principal)
-        profile = self.profiles.get_by_id(coach_profile_id)
-        if profile is None:
-            raise NotFoundError("Coach not found.")
+        profile = self._require_eligible_writer(principal, coach_profile_id)
         row = self.reviews.get_by_author_coach(
             author_user_id=principal.user_id,
             coach_profile_id=profile.id,
@@ -110,10 +153,7 @@ class ReviewService:
         return self._to_out(row, viewer_user_id=principal.user_id)
 
     def delete_mine(self, principal: Principal, coach_profile_id: str) -> dict:
-        self._require_trainee(principal)
-        profile = self.profiles.get_by_id(coach_profile_id)
-        if profile is None:
-            raise NotFoundError("Coach not found.")
+        profile = self._require_eligible_writer(principal, coach_profile_id)
         row = self.reviews.get_by_author_coach(
             author_user_id=principal.user_id,
             coach_profile_id=profile.id,
@@ -127,17 +167,25 @@ class ReviewService:
         return {"deleted": True}
 
     def get_mine(self, principal: Principal, coach_profile_id: str) -> CoachReviewMineOut:
-        self._require_trainee(principal)
         profile = self.profiles.get_by_id(coach_profile_id)
         if profile is None:
             raise NotFoundError("Coach not found.")
-        row = self.reviews.get_by_author_coach(
-            author_user_id=principal.user_id,
-            coach_profile_id=profile.id,
+
+        can_review, reason = self._eligibility(principal, profile)
+        row = None
+        if principal.role == "trainee":
+            row = self.reviews.get_by_author_coach(
+                author_user_id=principal.user_id,
+                coach_profile_id=profile.id,
+            )
+        review_out = (
+            self._to_out(row, viewer_user_id=principal.user_id) if row is not None else None
         )
-        if row is None:
-            return CoachReviewMineOut(review=None)
-        return CoachReviewMineOut(review=self._to_out(row, viewer_user_id=principal.user_id))
+        return CoachReviewMineOut(
+            review=review_out,
+            can_review=can_review,
+            reason=reason,
+        )
 
     def list_reviews(
         self,
@@ -150,7 +198,6 @@ class ReviewService:
         profile = self.profiles.get_by_id(coach_profile_id)
         if profile is None:
             raise NotFoundError("Coach not found.")
-        # Same visibility as detail: public or owner
         is_owner = principal.user_id == profile.user_id
         if not profile.is_public and not is_owner:
             raise NotFoundError("Coach not found.")
@@ -177,7 +224,6 @@ class ReviewService:
     ) -> CoachReviewReportOut:
         row = self.reviews.get(review_id)
         if row is None or row.is_hidden:
-            # Hide existence of hidden reviews to reporters
             raise NotFoundError("Review not found.")
         if row.author_user_id == principal.user_id:
             raise ForbiddenError("You cannot report your own review.")
@@ -210,25 +256,39 @@ class ReviewService:
             self.db.commit()
         return CoachReviewReportOut(reported=True)
 
-    def _require_trainee(self, principal: Principal) -> None:
+    def _eligibility(
+        self, principal: Principal, profile: models.CoachProfile
+    ) -> tuple[bool, EligibilityReason]:
         if principal.role != "trainee" or not principal.trainee_id:
-            raise ForbiddenError("Trainee access required.")
+            return False, "NOT_TRAINEE_ROLE"
+        if principal.user_id == profile.user_id:
+            return False, "IS_SELF"
+        if is_currently_rostered_for_coach(
+            self.db,
+            trainee_user_id=principal.user_id,
+            trainee_id=principal.trainee_id,
+            coach=profile,
+        ):
+            return True, "OK"
+        return False, "NOT_ROSTERED"
 
-    def _reviewable_profile(
+    def _require_eligible_writer(
         self, principal: Principal, coach_profile_id: str
     ) -> models.CoachProfile:
         profile = self.profiles.get_by_id(coach_profile_id)
         if profile is None:
             raise NotFoundError("Coach not found.")
-        if principal.user_id == profile.user_id:
+        can_review, reason = self._eligibility(principal, profile)
+        if reason == "NOT_TRAINEE_ROLE":
+            raise ForbiddenError("Trainee access required.")
+        if reason == "IS_SELF":
             raise ForbiddenError("You cannot review yourself.")
-        # Option A: public OR invite-linked
-        if profile.is_public:
-            return profile
-        trainee = self.db.get(models.TraineeProfile, principal.trainee_id)
-        if trainee is not None and trainee.trainer_id == profile.trainer_id:
-            return profile
-        raise NotFoundError("Coach not found.")
+        if not can_review:
+            raise ForbiddenError(
+                "Only current trainees of this coach can leave a review.",
+                code="NOT_ELIGIBLE",
+            )
+        return profile
 
     def _validate_payload(self, payload: CoachReviewCreateRequest) -> tuple[int, str | None]:
         stars = int(payload.stars)

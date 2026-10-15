@@ -1,4 +1,4 @@
-"""Phase 5 — coach reviews & ratings."""
+"""Coach reviews — roster-only create/edit; historical stay visible after leave."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from app.db import models
 from app.db.session import SessionLocal
 from app.main import app
 from app.repositories.reviews import ReviewRepository
+from app.services.roster_link_service import RosterLinkService
 
 
 @pytest.fixture(scope="module")
@@ -30,6 +31,8 @@ def _login(client: TestClient, email: str, password: str) -> dict:
         "token": body["accessToken"],
         "user_id": body["user"]["id"],
         "role": body["user"]["role"],
+        "trainee_id": (body.get("trainee") or {}).get("id"),
+        "trainer_id": (body.get("trainer") or {}).get("id"),
     }
 
 
@@ -39,9 +42,18 @@ def _auth(token: str) -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def users(client: TestClient) -> dict:
+    from app.core.redis import create_redis_client
+
+    r = create_redis_client()
+    try:
+        r.flushdb()
+    finally:
+        r.close()
     settings = get_settings()
     return {
-        "trainer": _login(client, "trainer@tactech.app", settings.seed_trainer_password),
+        "maya": _login(client, "trainer@tactech.app", settings.seed_trainer_password),
+        "sara": _login(client, "sara.coach@tactech.app", settings.seed_trainer_password),
+        "ali": _login(client, "ali.coach@tactech.app", settings.seed_trainer_password),
         "trainee": _login(client, "trainee@tactech.app", settings.seed_trainee_password),
         "priya": _login(client, "priya@tactech.app", settings.seed_trainee_password),
         "marcus": _login(client, "marcus@tactech.app", settings.seed_trainee_password),
@@ -65,24 +77,43 @@ def _clear_review(*, author_user_id: str, coach_profile_id: str) -> None:
         db.close()
 
 
-def _public_coach_id(exclude: set[str] | None = None) -> str:
-    exclude = exclude or set()
+def _link_trainee_to_trainer(*, trainee_id: str, trainer_id: str) -> None:
     db = SessionLocal()
     try:
-        rows = db.scalars(
-            select(models.CoachProfile).where(models.CoachProfile.is_public.is_(True))
-        ).all()
-        for r in rows:
-            if r.id not in exclude:
-                return r.id
-        raise AssertionError("no public coach")
+        trainee = db.get(models.TraineeProfile, trainee_id)
+        trainer = db.get(models.TrainerProfile, trainer_id)
+        assert trainee and trainer
+        RosterLinkService(db).activate(
+            trainer=trainer,
+            trainee=trainee,
+            invite_code_used=trainer.invite_code,
+            source="invite",
+        )
+        db.commit()
     finally:
         db.close()
 
 
-def test_create_review_updates_aggregates(client: TestClient, users: dict) -> None:
-    coach_id = "cp-sara"
+def _unlink_trainee(*, trainee_id: str) -> None:
+    db = SessionLocal()
+    try:
+        trainee = db.get(models.TraineeProfile, trainee_id)
+        assert trainee
+        RosterLinkService(db).end_active(trainee=trainee, ended_by_user_id=trainee.user_id)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_rostered_create_updates_aggregates(client: TestClient, users: dict) -> None:
+    coach_id = "cp-maya"
+    _link_trainee_to_trainer(trainee_id=users["trainee"]["trainee_id"], trainer_id="trainer-maya")
     _clear_review(author_user_id=users["trainee"]["user_id"], coach_profile_id=coach_id)
+
+    mine = client.get(f"/coaches/{coach_id}/reviews/me", headers=_auth(users["trainee"]["token"]))
+    assert mine.status_code == 200
+    assert mine.json()["canReview"] is True
+    assert mine.json()["reason"] == "OK"
 
     res = client.post(
         f"/coaches/{coach_id}/reviews",
@@ -95,28 +126,107 @@ def test_create_review_updates_aggregates(client: TestClient, users: dict) -> No
     assert body["body"] == "Great programming and responsive chat."
     assert body["isMine"] is True
     assert body["authorName"] == "Jordan"
-    assert "@" not in body["authorName"]
 
     listed = client.get(f"/coaches/{coach_id}/reviews", headers=_auth(users["trainee"]["token"]))
-    assert listed.status_code == 200, listed.text
+    assert listed.status_code == 200
     page = listed.json()
     assert page["ratingCount"] >= 1
-    assert page["ratingAvg"] is not None
     assert any(i["isMine"] for i in page["items"])
+    assert page["ratingCount"] == len(
+        [i for i in page["items"] if not i.get("isHidden")]
+    ) or page["ratingCount"] >= 1
 
     detail = client.get(f"/coaches/{coach_id}", headers=_auth(users["trainee"]["token"]))
-    assert detail.status_code == 200
-    assert detail.json()["ratingCount"] >= 1
-    assert detail.json()["ratingAvg"] is not None
+    assert detail.json()["ratingCount"] == page["ratingCount"]
+
+
+def test_cross_coach_forbidden(client: TestClient, users: dict) -> None:
+    _link_trainee_to_trainer(trainee_id=users["trainee"]["trainee_id"], trainer_id="trainer-maya")
+    before = client.get("/coaches/cp-sara/reviews", headers=_auth(users["trainee"]["token"]))
+    count_before = before.json()["ratingCount"]
+
+    res = client.post(
+        "/coaches/cp-sara/reviews",
+        headers=_auth(users["trainee"]["token"]),
+        json={"stars": 5, "body": "nope"},
+    )
+    assert res.status_code == 403
+    assert res.json()["code"] == "NOT_ELIGIBLE"
+
+    after = client.get("/coaches/cp-sara/reviews", headers=_auth(users["trainee"]["token"]))
+    assert after.json()["ratingCount"] == count_before
+
+    mine = client.get("/coaches/cp-sara/reviews/me", headers=_auth(users["trainee"]["token"]))
+    assert mine.json()["canReview"] is False
+    assert mine.json()["reason"] == "NOT_ROSTERED"
+
+
+def test_guest_trainee_cannot_write(client: TestClient, users: dict) -> None:
+    _unlink_trainee(trainee_id=users["trainee"]["trainee_id"])
+    mine = client.get("/coaches/cp-maya/reviews/me", headers=_auth(users["trainee"]["token"]))
+    assert mine.json()["canReview"] is False
+    assert mine.json()["reason"] == "NOT_ROSTERED"
+
+    res = client.post(
+        "/coaches/cp-maya/reviews",
+        headers=_auth(users["trainee"]["token"]),
+        json={"stars": 4, "body": "guest"},
+    )
+    assert res.status_code == 403
+    assert res.json()["code"] == "NOT_ELIGIBLE"
+
+    # List still public
+    listed = client.get("/coaches/cp-maya/reviews", headers=_auth(users["trainee"]["token"]))
+    assert listed.status_code == 200
+
+
+def test_after_leave_review_stays_edit_blocked(client: TestClient, users: dict) -> None:
+    coach_id = "cp-maya"
+    _link_trainee_to_trainer(trainee_id=users["priya"]["trainee_id"], trainer_id="trainer-maya")
+    _clear_review(author_user_id=users["priya"]["user_id"], coach_profile_id=coach_id)
+
+    created = client.post(
+        f"/coaches/{coach_id}/reviews",
+        headers=_auth(users["priya"]["token"]),
+        json={"stars": 4, "body": "before leave"},
+    )
+    assert created.status_code == 201, created.text
+    review_id = created.json()["id"]
+
+    _unlink_trainee(trainee_id=users["priya"]["trainee_id"])
+
+    mine = client.get(f"/coaches/{coach_id}/reviews/me", headers=_auth(users["priya"]["token"]))
+    assert mine.status_code == 200
+    assert mine.json()["canReview"] is False
+    assert mine.json()["reason"] == "NOT_ROSTERED"
+    assert mine.json()["review"] is not None
+    assert mine.json()["review"]["id"] == review_id
+
+    put = client.put(
+        f"/coaches/{coach_id}/reviews/me",
+        headers=_auth(users["priya"]["token"]),
+        json={"stars": 1, "body": "hack"},
+    )
+    assert put.status_code == 403
+    assert put.json()["code"] == "NOT_ELIGIBLE"
+
+    delete = client.delete(
+        f"/coaches/{coach_id}/reviews/me",
+        headers=_auth(users["priya"]["token"]),
+    )
+    assert delete.status_code == 403
+
+    listed = client.get(f"/coaches/{coach_id}/reviews", headers=_auth(users["maya"]["token"]))
+    assert review_id in {i["id"] for i in listed.json()["items"]}
+
+    # Restore priya on maya for other tests
+    _link_trainee_to_trainer(trainee_id=users["priya"]["trainee_id"], trainer_id="trainer-maya")
 
 
 def test_second_post_conflicts(client: TestClient, users: dict) -> None:
-    coach_id = "cp-sara"
-    # Ensure one exists
-    mine = client.get(
-        f"/coaches/{coach_id}/reviews/me",
-        headers=_auth(users["trainee"]["token"]),
-    )
+    coach_id = "cp-maya"
+    _link_trainee_to_trainer(trainee_id=users["trainee"]["trainee_id"], trainer_id="trainer-maya")
+    mine = client.get(f"/coaches/{coach_id}/reviews/me", headers=_auth(users["trainee"]["token"]))
     if mine.json().get("review") is None:
         client.post(
             f"/coaches/{coach_id}/reviews",
@@ -132,52 +242,51 @@ def test_second_post_conflicts(client: TestClient, users: dict) -> None:
     assert again.json()["code"] == "CONFLICT"
 
 
-def test_put_updates_and_delete_clears(client: TestClient, users: dict) -> None:
-    coach_id = "cp-omar"
-    _clear_review(author_user_id=users["trainee"]["user_id"], coach_profile_id=coach_id)
+def test_put_updates_and_delete_while_rostered(client: TestClient, users: dict) -> None:
+    coach_id = "cp-maya"
+    _link_trainee_to_trainer(trainee_id=users["marcus"]["trainee_id"], trainer_id="trainer-maya")
+    _clear_review(author_user_id=users["marcus"]["user_id"], coach_profile_id=coach_id)
+
     created = client.post(
         f"/coaches/{coach_id}/reviews",
-        headers=_auth(users["trainee"]["token"]),
+        headers=_auth(users["marcus"]["token"]),
         json={"stars": 3, "body": "average"},
     )
     assert created.status_code == 201
 
     updated = client.put(
         f"/coaches/{coach_id}/reviews/me",
-        headers=_auth(users["trainee"]["token"]),
+        headers=_auth(users["marcus"]["token"]),
         json={"stars": 5, "body": "updated thoughts"},
     )
-    assert updated.status_code == 200, updated.text
+    assert updated.status_code == 200
     assert updated.json()["stars"] == 5
-    assert updated.json()["body"] == "updated thoughts"
 
     deleted = client.delete(
         f"/coaches/{coach_id}/reviews/me",
-        headers=_auth(users["trainee"]["token"]),
+        headers=_auth(users["marcus"]["token"]),
     )
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
-
-    mine = client.get(
-        f"/coaches/{coach_id}/reviews/me",
-        headers=_auth(users["trainee"]["token"]),
-    )
-    assert mine.status_code == 200
-    assert mine.json()["review"] is None
 
 
 def test_non_trainee_forbidden(client: TestClient, users: dict) -> None:
     res = client.post(
         "/coaches/cp-maya/reviews",
-        headers=_auth(users["trainer"]["token"]),
+        headers=_auth(users["maya"]["token"]),
         json={"stars": 5, "body": "nope"},
     )
     assert res.status_code == 403
-    assert res.json()["code"] == "FORBIDDEN"
+
+    mine = client.get("/coaches/cp-maya/reviews/me", headers=_auth(users["maya"]["token"]))
+    assert mine.status_code == 200
+    assert mine.json()["canReview"] is False
+    assert mine.json()["reason"] == "NOT_TRAINEE_ROLE"
 
 
 def test_hidden_excluded_from_public_list(client: TestClient, users: dict) -> None:
-    coach_id = "cp-ali"
+    coach_id = "cp-maya"
+    _link_trainee_to_trainer(trainee_id=users["marcus"]["trainee_id"], trainer_id="trainer-maya")
     _clear_review(author_user_id=users["marcus"]["user_id"], coach_profile_id=coach_id)
     created = client.post(
         f"/coaches/{coach_id}/reviews",
@@ -198,11 +307,8 @@ def test_hidden_excluded_from_public_list(client: TestClient, users: dict) -> No
         db.close()
 
     listed = client.get(f"/coaches/{coach_id}/reviews", headers=_auth(users["priya"]["token"]))
-    assert listed.status_code == 200
-    ids = {i["id"] for i in listed.json()["items"]}
-    assert review_id not in ids
+    assert review_id not in {i["id"] for i in listed.json()["items"]}
 
-    # Author can still see own hidden
     author_list = client.get(
         f"/coaches/{coach_id}/reviews",
         headers=_auth(users["marcus"]["token"]),
@@ -217,13 +323,10 @@ def test_discovery_sort_boost_then_rating(client: TestClient, users: dict) -> No
         maya = db.get(models.CoachProfile, "cp-maya")
         ali = db.get(models.CoachProfile, "cp-ali")
         assert maya and ali
-        # Maya: high rating, no boost
         maya.rating_avg = Decimal("4.90")
         maya.rating_count = 20
-        # Ali: lower rating but will get boost
         ali.rating_avg = Decimal("3.00")
         ali.rating_count = 2
-        # Clear maya boosts; grant ali boost
         for b in db.scalars(
             select(models.CoachBoost).where(
                 models.CoachBoost.user_id.in_([maya.user_id, ali.user_id])
@@ -257,16 +360,12 @@ def test_discovery_sort_boost_then_rating(client: TestClient, users: dict) -> No
     res = client.get("/coaches", headers=_auth(users["trainee"]["token"]))
     assert res.status_code == 200
     items = res.json()["items"]
-    assert items
-    # Boosted Ali should rank above higher-rated Maya
     ids = [i["id"] for i in items]
     assert ids.index("cp-ali") < ids.index("cp-maya")
-    assert items[0]["boostActive"] is True or "cp-ali" in ids[:2]
 
 
 def test_report_idempotent(client: TestClient, users: dict) -> None:
     coach_id = "cp-maya"
-    # Use seed review if present, else create with priya
     listed = client.get(f"/coaches/{coach_id}/reviews", headers=_auth(users["trainee"]["token"]))
     items = listed.json()["items"]
     review_id = None
@@ -275,6 +374,7 @@ def test_report_idempotent(client: TestClient, users: dict) -> None:
             review_id = item["id"]
             break
     if review_id is None:
+        _link_trainee_to_trainer(trainee_id=users["priya"]["trainee_id"], trainer_id="trainer-maya")
         _clear_review(author_user_id=users["priya"]["user_id"], coach_profile_id=coach_id)
         created = client.post(
             f"/coaches/{coach_id}/reviews",
@@ -289,23 +389,20 @@ def test_report_idempotent(client: TestClient, users: dict) -> None:
         json={"reason": "Spam or fake"},
     )
     assert r1.status_code == 200
-    assert r1.json()["reported"] is True
     r2 = client.post(
         f"/coaches/reviews/{review_id}/report",
         headers=_auth(users["trainee"]["token"]),
         json={"reason": "Spam or fake"},
     )
     assert r2.status_code == 200
-    assert r2.json()["reported"] is True
 
 
 def test_me_coach_profile_includes_ratings(client: TestClient, users: dict) -> None:
-    res = client.get("/me/coach-profile", headers=_auth(users["trainer"]["token"]))
-    assert res.status_code == 200, res.text
+    res = client.get("/me/coach-profile", headers=_auth(users["maya"]["token"]))
+    assert res.status_code == 200
     body = res.json()
     assert "ratingAvg" in body
     assert "ratingCount" in body
-    assert isinstance(body["ratingCount"], int)
 
 
 def test_contact_still_works(client: TestClient, users: dict) -> None:

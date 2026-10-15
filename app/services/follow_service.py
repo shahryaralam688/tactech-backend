@@ -28,6 +28,8 @@ from app.schemas.follows import (
 )
 from app.services.package_service import format_price_label
 from app.services.push_service import PushService
+from app.services.roster_link_service import RosterLinkService
+from app.repositories.trainer import TrainerRepository
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -51,6 +53,8 @@ class FollowService:
         self.profiles = CoachProfileRepository(db)
         self.chat = ChatRepository(db)
         self.push = PushService(db, hub=chat_hub)
+        self.roster = RosterLinkService(db)
+        self.trainers = TrainerRepository(db)
 
     # --- Trainee ------------------------------------------------------------
 
@@ -496,17 +500,29 @@ class FollowService:
         ).first()
 
     def _link_roster(self, trainee: models.TraineeProfile, trainer_id: str) -> None:
-        trainee.trainer_id = trainer_id
-        self.db.add(trainee)
-        self.db.flush()
+        trainer = self.trainers.get(trainer_id)
+        if trainer is None:
+            trainee.trainer_id = trainer_id
+            self.db.add(trainee)
+            self.db.flush()
+            return
+        self.roster.activate(
+            trainer=trainer,
+            trainee=trainee,
+            invite_code_used=None,
+            source="follow",
+        )
 
     def _unlink_roster_if_match(self, trainee_user_id: str, trainer_profile_id: str) -> None:
         trainee = self.db.scalars(
             select(models.TraineeProfile).where(models.TraineeProfile.user_id == trainee_user_id)
         ).first()
         if trainee is not None and trainee.trainer_id == trainer_profile_id:
-            trainee.trainer_id = None
-            self.db.add(trainee)
+            self.roster.end_active(
+                trainee=trainee,
+                ended_by_user_id=trainee.user_id,
+                expected_trainer_id=trainer_profile_id,
+            )
 
     def _end_follow(
         self, row: models.CoachFollow, *, ended_by: str, notify_other: bool

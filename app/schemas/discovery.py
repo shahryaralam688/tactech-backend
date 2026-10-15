@@ -189,6 +189,8 @@ class CoachReviewListPage(APIModel):
 
 class CoachReviewMineOut(APIModel):
     review: CoachReviewOut | None = None
+    can_review: bool = False
+    reason: str | None = None  # OK | NOT_TRAINEE_ROLE | NOT_ROSTERED | IS_SELF
 
 
 class CoachReviewReportRequest(APIModel):

@@ -22,18 +22,30 @@ class InvalidCredentialsError(AppError):
 
 
 class ValidationAppError(AppError):
-    def __init__(self, message: str, fields: dict[str, str] | None = None) -> None:
-        super().__init__(message, status_code=400, code="VALIDATION_ERROR", fields=fields)
+    def __init__(
+        self,
+        message: str,
+        fields: dict[str, str] | None = None,
+        *,
+        status_code: int = 400,
+        code: str = "VALIDATION_ERROR",
+    ) -> None:
+        super().__init__(message, status_code=status_code, code=code, fields=fields)
 
 
 class NotFoundError(AppError):
-    def __init__(self, message: str = "Not found.") -> None:
-        super().__init__(message, status_code=404, code="NOT_FOUND")
+    def __init__(self, message: str = "Not found.", *, code: str = "NOT_FOUND") -> None:
+        super().__init__(message, status_code=404, code=code)
 
 
 class ForbiddenError(AppError):
-    def __init__(self, message: str = "You do not have access to this resource.") -> None:
-        super().__init__(message, status_code=403, code="FORBIDDEN")
+    def __init__(
+        self,
+        message: str = "You do not have access to this resource.",
+        *,
+        code: str = "FORBIDDEN",
+    ) -> None:
+        super().__init__(message, status_code=403, code=code)
 
 
 class UnauthorizedError(AppError):
@@ -64,8 +76,14 @@ class RateLimitError(AppError):
         *,
         retry_after: int = 60,
     ) -> None:
-        super().__init__(message, status_code=429, code="RATE_LIMITED")
-        self.retry_after = max(1, int(retry_after))
+        wait = max(1, int(retry_after))
+        super().__init__(
+            message,
+            status_code=429,
+            code="RATE_LIMITED",
+            extra={"retryAfter": wait},
+        )
+        self.retry_after = wait
 
 
 class PayloadTooLargeError(AppError):
@@ -98,6 +116,50 @@ class AiRequiredError(AppError):
                 "action": "subscribe",
                 "productHint": product_hint,
             },
+        )
+
+
+class AiQuotaExceededError(AppError):
+    def __init__(
+        self,
+        message: str = "Free AI quota used up. Upgrade to continue.",
+        *,
+        product_hint: str = "ai.pro.monthly",
+        quota: str = "chat",
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=402,
+            code="AI_QUOTA_EXCEEDED",
+            extra={
+                "action": "subscribe",
+                "productHint": product_hint,
+                "quota": quota,
+            },
+        )
+
+
+class AiProviderNotConfiguredError(AppError):
+    def __init__(
+        self,
+        message: str = "AI text provider is not configured.",
+    ) -> None:
+        super().__init__(message, status_code=503, code="AI_PROVIDER_NOT_CONFIGURED")
+
+
+class AiCapabilityUnavailableError(AppError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        capability: str,
+        status_code: int = 501,
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=status_code,
+            code="AI_CAPABILITY_UNAVAILABLE",
+            extra={"capability": capability},
         )
 
 

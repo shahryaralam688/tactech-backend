@@ -88,7 +88,82 @@ class TraineeProfile(Base):
     )
 
 
+class JoinRequest(Base):
+    """Invite-code join request: pending until trainer accept/reject or trainee cancel."""
+
+    __tablename__ = "join_requests"
+    __table_args__ = (
+        Index("ix_join_requests_trainer_status", "trainer_user_id", "status"),
+        Index("ix_join_requests_trainee_status", "trainee_user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainee_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trainer_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trainee_id: Mapped[str] = mapped_column(
+        ForeignKey("trainee_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invite_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # pending|accepted|rejected|cancelled
+    reject_reason: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TrainerTraineeLink(Base):
+    """Invite (or follow) roster relationship with soft-end history.
+
+    Active roster pointer remains ``TraineeProfile.trainer_id`` for fast queries;
+    this table is the durable lifecycle (active|ended) and re-link history.
+    """
+
+    __tablename__ = "trainer_trainee_links"
+    __table_args__ = (
+        Index("ix_ttl_trainee_status", "trainee_id", "status"),
+        Index("ix_ttl_trainer_status", "trainer_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainer_id: Mapped[str] = mapped_column(
+        ForeignKey("trainer_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainee_id: Mapped[str] = mapped_column(
+        ForeignKey("trainee_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainer_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainee_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # active | ended
+    invite_code_used: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="invite")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class Exercise(Base):
+    """Curated plan catalog. Optional Form Studio 3D demo metadata (Mixamo X_Bot)."""
+
     __tablename__ = "exercises"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -98,6 +173,24 @@ class Exercise(Base):
     difficulty: Mapped[str] = mapped_column(String(32), nullable=False)
     cues: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     icon: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Enriched catalog + Form Studio 3D (additive; legacy columns unchanged)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    muscles: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    equipment_list: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    common_mistakes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    form3d_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    form3d_clip_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    form3d_character: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    form3d_animation_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    form3d_guide: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    form3d_cues: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    mixamo_query: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class WorkoutPlan(Base):
@@ -106,6 +199,13 @@ class WorkoutPlan(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     trainer_id: Mapped[str | None] = mapped_column(
         ForeignKey("trainer_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # ai = solo LLM generate; trainer = human coach program
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="trainer", index=True)
+    owner_trainee_id: Mapped[str | None] = mapped_column(
+        ForeignKey("trainee_profiles.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -994,6 +1094,31 @@ class AiUsageWeekly(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     week_start: Mapped[object] = mapped_column(Date, nullable=False)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AiUsageDaily(Base):
+    """Free daily AI chat counters (when AI_FREE_CHAT_DAILY_LIMIT > 0)."""
+
+    __tablename__ = "ai_usage_daily"
+    __table_args__ = (UniqueConstraint("user_id", "usage_day", name="uq_ai_usage_daily_user_day"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    usage_day: Mapped[object] = mapped_column(Date, nullable=False)
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AiPlanGenerationUsage(Base):
+    """Lifetime free structured plan generation counter (AI_FREE_PLAN_GENERATIONS)."""
+
+    __tablename__ = "ai_plan_generation_usage"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    generation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CoachBoost(Base):

@@ -76,6 +76,7 @@ class AiBillingService:
             transaction_id=transaction_id,
             original_transaction_id=original_transaction_id,
         )
+        tx = self._normalize_storekit_placeholder_ids(principal.user_id, tx)
         self._apply_transaction(principal.user_id, tx, signed_renewal_info=signed_renewal_info)
         log.info(
             "ai_verify_ok",
@@ -102,6 +103,7 @@ class AiBillingService:
                 transaction_id=tid,
                 original_transaction_id=otid,
             )
+            tx = self._normalize_storekit_placeholder_ids(principal.user_id, tx)
             self._apply_transaction(principal.user_id, tx, allow_rebind_same_user=True)
         log.info("ai_restore_ok", user_id=principal.user_id, count=len(transactions))
         return self.get_me_ai(principal.user_id)
@@ -239,6 +241,44 @@ class AiBillingService:
 
     # --- internals ---------------------------------------------------------
 
+    @staticmethod
+    def _is_storekit_placeholder(value: str | None) -> bool:
+        return (value or "").strip() in {"", "0", "null", "None"}
+
+    def _normalize_storekit_placeholder_ids(
+        self, user_id: str, tx: VerifiedAppleTransaction
+    ) -> VerifiedAppleTransaction:
+        """Xcode StoreKit Testing often emits transactionId/originalTransactionId = \"0\".
+
+        Without App Store Server API keys that placeholder collides across accounts → 409.
+        In development/test, rewrite to a per-user synthetic id so verify succeeds.
+        """
+        tid_bad = self._is_storekit_placeholder(tx.transaction_id)
+        otid_bad = self._is_storekit_placeholder(tx.original_transaction_id)
+        if not tid_bad and not otid_bad:
+            return tx
+
+        env = (self.settings.app_env or "").lower()
+        if env not in {"development", "test", "local"}:
+            raise ValidationAppError(
+                "Invalid Apple transaction id. Use a real StoreKit / App Store purchase.",
+                fields={"transactionId": "invalid"},
+            )
+
+        product = (tx.product_id or "unknown").strip() or "unknown"
+        synth = f"storekit-dev:{user_id}:{product}"
+        if tid_bad:
+            tx.transaction_id = synth
+        if otid_bad:
+            tx.original_transaction_id = synth
+        log.warning(
+            "apple_storekit_placeholder_rewritten",
+            user_id=user_id,
+            product_id=product,
+            synthetic_id=synth,
+        )
+        return tx
+
     def _resolve_transaction(
         self,
         *,
@@ -253,6 +293,11 @@ class AiBillingService:
             raise ValidationAppError(
                 "Provide signedTransaction or transactionId.",
                 fields={"transactionId": "required"},
+            )
+        if self._is_storekit_placeholder(tid) and not self.apple.configured():
+            raise ValidationAppError(
+                "Provide signedTransaction (StoreKit placeholder id and Apple API not configured).",
+                fields={"signedTransaction": "required"},
             )
         return self.apple.get_transaction(tid)
 

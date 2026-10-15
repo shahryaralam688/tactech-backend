@@ -78,7 +78,79 @@ def trainee_out(
 
 
 def exercise_out(exercise: models.Exercise) -> ExerciseOut:
-    return ExerciseOut.model_validate(exercise)
+    """Catalog DTO with nested form3d (always present; enabled=false when no clip)."""
+    from app.schemas.common import Form3dCameraOut, Form3dGuideStepOut, Form3dOut
+
+    level = (exercise.level or exercise.difficulty or "").strip().lower() or None
+    muscles = list(exercise.muscles or [])
+    if not muscles and exercise.muscle_group:
+        muscles = [exercise.muscle_group]
+    equipment_list = list(exercise.equipment_list or [])
+    if not equipment_list and exercise.equipment:
+        equipment_list = [exercise.equipment.lower()]
+
+    guide_raw = exercise.form3d_guide or []
+    guide: list[Form3dGuideStepOut] = []
+    for step in guide_raw:
+        if not isinstance(step, dict):
+            continue
+        cam = step.get("camera")
+        camera = None
+        if isinstance(cam, dict):
+            camera = Form3dCameraOut(
+                pos=list(cam.get("pos") or []),
+                target=list(cam.get("target") or []),
+            )
+        guide.append(
+            Form3dGuideStepOut(
+                focus=str(step.get("focus") or ""),
+                title=str(step.get("title") or ""),
+                detail=str(step.get("detail") or ""),
+                t=float(step.get("t") or 0),
+                camera=camera,
+            )
+        )
+
+    enabled = bool(exercise.form3d_enabled)
+    if enabled:
+        form3d = Form3dOut(
+            enabled=True,
+            clip_id=exercise.form3d_clip_id,
+            character=exercise.form3d_character or "x_bot",
+            animation_url=exercise.form3d_animation_url,
+            cues=list(exercise.form3d_cues or []),
+            guide=guide,
+            attribution="Mixamo",
+        )
+    else:
+        form3d = Form3dOut(
+            enabled=False,
+            clip_id=None,
+            character=None,
+            animation_url=None,
+            cues=[],
+            guide=[],
+            attribution=None,
+        )
+
+    return ExerciseOut(
+        id=exercise.id,
+        name=exercise.name,
+        muscle_group=exercise.muscle_group,
+        equipment=exercise.equipment,
+        difficulty=exercise.difficulty,
+        cues=list(exercise.cues or []),
+        icon=exercise.icon,
+        category=exercise.category,
+        muscles=muscles,
+        level=level,
+        equipment_list=equipment_list,
+        instructions=exercise.instructions,
+        common_mistakes=list(exercise.common_mistakes or []),
+        thumbnail_url=exercise.thumbnail_url,
+        form3d=form3d,
+        updated_at=exercise.updated_at,
+    )
 
 
 def _day_exercise_out(item: models.PlanExercise) -> PlanDayExerciseOut:
@@ -135,9 +207,12 @@ def plan_out(plan: models.WorkoutPlan) -> WorkoutPlanOut:
             for day in days
             for item in sorted(day.exercises, key=lambda e: e.sort_order)
         ]
+    source = getattr(plan, "source", None) or ("ai" if not plan.trainer_id else "trainer")
     return WorkoutPlanOut(
         id=plan.id,
         trainer_id=plan.trainer_id,
+        source=source,
+        owner_trainee_id=getattr(plan, "owner_trainee_id", None),
         title=plan.title,
         focus=plan.focus,
         duration_minutes=plan.duration_minutes,

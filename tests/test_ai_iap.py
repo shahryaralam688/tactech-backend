@@ -227,6 +227,41 @@ def test_wrong_bundle_and_unknown_product(
     assert r2.status_code == 400
 
 
+def test_storekit_placeholder_tx_id_zero_no_cross_account_409(
+    client: TestClient, users: dict, fake_apple: FakeApple
+) -> None:
+    """Xcode StoreKit Testing often sends transactionId=0 — must not 409 across users."""
+    _clear_ai(users["trainee"]["user_id"])
+    _clear_ai(users["trainee2"]["user_id"])
+    now = datetime.now(timezone.utc)
+    payload = {
+        "transactionId": "0",
+        "originalTransactionId": "0",
+        "productId": "ai.pro.monthly",
+        "bundleId": "com.tactech.app",
+        "environment": "Sandbox",
+        "purchaseDate": int(now.timestamp() * 1000),
+        "expiresDate": int((now + timedelta(days=30)).timestamp() * 1000),
+    }
+    signed = _jws(payload)
+
+    r1 = client.post(
+        "/billing/ai/apple/verify",
+        headers=_auth(users["trainee"]["token"]),
+        json={"signedTransaction": signed},
+    )
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["active"] is True
+
+    r2 = client.post(
+        "/billing/ai/apple/verify",
+        headers=_auth(users["trainee2"]["token"]),
+        json={"signedTransaction": signed},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["active"] is True
+
+
 def test_original_transaction_conflict_409(
     client: TestClient, users: dict, fake_apple: FakeApple
 ) -> None:
@@ -306,8 +341,9 @@ def test_assn_expired_turns_inactive(
 
 def test_ai_chat_402_without_entitlement(client: TestClient, users: dict) -> None:
     _clear_ai(users["trainee"]["user_id"])
-    # Ensure hard paywall on cached settings instance
+    # Ensure hard paywall on cached settings instance (no daily free + no weekly tease)
     object.__setattr__(get_settings(), "ai_free_tease_messages_per_week", 0)
+    object.__setattr__(get_settings(), "ai_free_chat_daily_limit", 0)
 
     res = client.post(
         "/coach/chat",

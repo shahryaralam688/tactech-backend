@@ -7,7 +7,7 @@ Trainees can **Follow / Hire** a public coach from discovery. On accept (or auto
 | Action | Endpoint | Creates roster link? | Chat? |
 |--------|----------|----------------------|-------|
 | **Follow / hire** | `POST /coaches/{id}/follow` | Yes, after accept (or immediately if `followMode=auto_accept`) | Prefer reuse/create human thread + context message |
-| **Invite code** | `POST /trainee/link` | Yes, immediately | No (unless already chatting) |
+| **Invite code** | `POST /trainee/join-requests` (alias: `/trainee/link`) → trainer Accept | After Accept only | No (unless already chatting) |
 | **Contact** | `POST /coaches/{id}/contact` | No | Yes |
 | **Package inquire** | `POST /coaches/{id}/packages/{pkg}/inquire` | No | Yes + package interest text |
 

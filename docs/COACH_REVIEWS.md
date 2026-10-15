@@ -1,38 +1,48 @@
-# Phase 5 — Coach Reviews & Ratings
+# Coach Reviews & Ratings (roster-only)
 
-Trainees rate public coaches (1–5 stars). Discovery shows `ratingAvg` / `ratingCount`. Boost still ranks above rating.
+Marketplace coach profiles show **only reviews from that coach’s trainees**.  
+Create / edit / delete require an **active** roster link (post join-Accept). After Leave/Remove, historical reviews stay visible but edits are blocked.
 
-## Eligibility (Option A)
+## Eligibility
 
-Trainee may review if coach `isPublic == true` **or** invite-linked to that trainer.  
-No chat-thread or payment required.
+```text
+canReview = role==trainee
+         AND caller != coach.userId
+         AND trainee.trainer_id == coach.trainer_id
+            (or active trainer_trainee_links row)
+```
+
+| reason | meaning |
+|--------|---------|
+| `OK` | may create/edit/delete |
+| `NOT_ROSTERED` | not currently linked |
+| `NOT_TRAINEE_ROLE` | trainer / wrong role |
+| `IS_SELF` | coach viewing self |
+
+Write failures → `403` with `code: "NOT_ELIGIBLE"`  
+detail: `"Only current trainees of this coach can leave a review."`
 
 ## Endpoints
 
-| Method | Path | Auth |
-|--------|------|------|
-| POST | `/coaches/{id}/reviews` | trainee → **201** |
-| PUT | `/coaches/{id}/reviews/me` | trainee author |
-| DELETE | `/coaches/{id}/reviews/me` | trainee author |
-| GET | `/coaches/{id}/reviews` | any logged-in |
-| GET | `/coaches/{id}/reviews/me` | trainee → `{ "review": null \| … }` |
-| POST | `/coaches/reviews/{reviewId}/report` | any logged-in (not author) |
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/coaches/{id}/reviews/me` | `{ review, canReview, reason }` — any auth |
+| POST | `/coaches/{id}/reviews` | roster only → 201 |
+| PUT | `/coaches/{id}/reviews/me` | roster only |
+| DELETE | `/coaches/{id}/reviews/me` | roster only |
+| GET | `/coaches/{id}/reviews` | public list; averages = eligible-only |
+| POST | `/coaches/reviews/{id}/report` | any auth (not author) |
+
+## Migration
+
+`026_reviews_roster_only` — deletes reviews whose author was **never** linked to that coach (no current `trainer_id` match and no `trainer_trainee_links` history), then recomputes `ratingAvg` / `ratingCount`.  
+Staging run purged **10** orphan rows. Leave/remove does **not** delete reviews.
 
 ## Aggregates
 
-Denormalized on `coach_profiles` (`ratingAvg`, `ratingCount`). Recomputed on create/update/delete/hide.  
-API exposes `ratingAvg` to **one decimal** (e.g. `4.7`); `null` when count=0.
+Denormalized on `coach_profiles`. Recomputed on create/update/delete/hide.  
+`ratingAvg` to one decimal; `null` when count=0.
 
-## Moderation
+## iOS
 
-Reports stored in `coach_review_reports` (unique per reporter↔review).  
-Auto-hide after **≥3** distinct reports; aggregates exclude hidden.
-
-## Sort
-
-`boostActive DESC` → `ratingAvg DESC NULLS LAST` → `ratingCount DESC` → `updatedAt DESC`.
-
-## iOS fields
-
-Add to coach list/detail/`/me/coach-profile`: `ratingAvg`, `ratingCount`.  
-Review DTOs: `authorName` (first name only), `isMine`, `stars`, `body`.
+Use `canReview` to show/hide Write/Edit. If `review != null && canReview == false`, show review read-only.

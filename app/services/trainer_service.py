@@ -3,7 +3,8 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
+from app.core.logging import get_logger
 from app.db import models
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.coaching import CoachingRepository
@@ -47,7 +48,13 @@ from app.schemas.responses import (
     TraineeRosterItem,
     TrainerPublic,
 )
+from app.schemas.roster import RemoveTraineeOut
 from app.services.access import require_owned_trainee
+from app.services.roster_link_service import RosterLinkService
+from app.services.push_service import PushService
+from app.realtime.chat_hub import chat_hub
+
+log = get_logger("tactech.trainer")
 
 
 def _utc_now() -> datetime:
@@ -66,6 +73,8 @@ class TrainerService:
         self.exercises = ExerciseRepository(db)
         self.users = UserRepository(db)
         self.db = db
+        self.roster = RosterLinkService(db)
+        self.push = PushService(db, hub=chat_hub)
 
     def update_profile(self, trainer_id: str, payload: UpdateTrainerProfileRequest) -> TrainerPublic:
         trainer = self.trainers.get_with_user(trainer_id)
@@ -86,18 +95,117 @@ class TrainerService:
         items = []
         for trainee in self.trainees.list_for_trainer(trainer_id):
             assignment = self.assignments.get_for_trainee(trainee.id)
+            assigned_plan = None
+            if assignment and assignment.plan and assignment.plan.deleted_at is None:
+                # Assessment / legacy plans may have trainer_id=null — still show on roster.
+                if assignment.plan.trainer_id is None:
+                    assignment.plan.trainer_id = trainer_id
+                    self.db.add(assignment.plan)
+                try:
+                    assigned_plan = plan_out(assignment.plan)
+                except Exception:
+                    log.exception(
+                        "list_trainees_plan_out_failed",
+                        trainee_id=trainee.id,
+                        plan_id=assignment.plan_id,
+                    )
+                    assigned_plan = None
             items.append(
                 TraineeRosterItem(
                     **trainee_out(trainee).model_dump(),
                     user=user_public(trainee.user),
-                    assigned_plan=(
-                        plan_out(assignment.plan)
-                        if assignment and assignment.plan and assignment.plan.deleted_at is None
-                        else None
-                    ),
+                    assigned_plan=assigned_plan,
                 )
             )
         return items
+
+    def remove_trainee(self, trainer_id: str, trainee_id: str) -> RemoveTraineeOut:
+        """Trainer removes trainee from roster — soft-end link, clear plan, keep chat.
+
+        ``trainee_id`` may be trainee profile id or trainee user id (iOS may send either).
+        """
+        trainer = self.trainers.get(trainer_id)
+        if trainer is None:
+            log.info(
+                "trainer_remove_denied",
+                status_code=404,
+                user_id=None,
+                trainer_id=trainer_id,
+                trainee_id=trainee_id,
+                reason="no_trainer",
+            )
+            raise NotFoundError("Trainer profile not found.")
+
+        resolved = self.trainees.get(trainee_id) or self.trainees.get_by_user_id(trainee_id)
+        if resolved is None:
+            log.info(
+                "trainer_remove_denied",
+                status_code=404,
+                user_id=trainer.user_id,
+                trainer_id=trainer_id,
+                trainee_id=trainee_id,
+                reason="trainee_not_found",
+            )
+            raise NotFoundError("Trainee not found.")
+
+        try:
+            require_owned_trainee(self.trainees, trainer_id, resolved.id)
+        except (ForbiddenError, NotFoundError):
+            log.info(
+                "trainer_remove_denied",
+                status_code=403,
+                user_id=trainer.user_id,
+                trainer_id=trainer_id,
+                trainee_id=resolved.id,
+                reason="not_on_roster",
+            )
+            raise
+
+        loaded = self.trainees.get_with_user(resolved.id) or resolved
+
+        ended = self.roster.end_active(
+            trainee=loaded,
+            ended_by_user_id=trainer.user_id,
+            expected_trainer_id=trainer_id,
+        )
+        if loaded.trainer_id is not None:
+            loaded.trainer_id = None
+            self.db.add(loaded)
+            self.db.flush()
+
+        ended_at = ended.ended_at if ended and ended.ended_at else _utc_now()
+        if ended_at.tzinfo is None:
+            ended_at = ended_at.replace(tzinfo=timezone.utc)
+
+        trainer_name = "Your trainer"
+        user = self.users.get(trainer.user_id)
+        if user is not None:
+            trainer_name = user.name
+
+        try:
+            self.push.notify_relationship_ended_sync(
+                peer_user_id=loaded.user_id,
+                actor_user_id=trainer.user_id,
+                reason="trainer_removed",
+                title="Removed by trainer",
+                body=f"{trainer_name} removed you from their roster.",
+                trainer_user_id=trainer.user_id,
+                trainee_user_id=loaded.user_id,
+                trainee_profile_id=loaded.id,
+                trainer_name=trainer_name,
+                occurred_at=ended_at.isoformat().replace("+00:00", "Z"),
+            )
+        except Exception:
+            log.exception("trainer_removed_notify_failed", trainee_id=loaded.id)
+
+        log.info(
+            "trainee_removed",
+            status_code=200,
+            user_id=trainer.user_id,
+            trainer_id=trainer_id,
+            trainee_id=loaded.id,
+        )
+        return RemoveTraineeOut(ok=True, trainee_id=loaded.id, ended_at=ended_at)
 
     def get_trainee(self, trainer_id: str, trainee_id: str) -> TraineeRosterItem:
         trainee = require_owned_trainee(self.trainees, trainer_id, trainee_id)
@@ -131,6 +239,8 @@ class TrainerService:
         plan = models.WorkoutPlan(
             id=plan_id,
             trainer_id=trainer_id,
+            source="trainer",
+            owner_trainee_id=None,
             title="",
             focus="",
             duration_minutes=payload.duration_minutes,
@@ -147,6 +257,12 @@ class TrainerService:
         plan = self.plans.get(plan_id)
         if plan is None or plan.trainer_id != trainer_id:
             raise NotFoundError("Workout plan not found.")
+        if (getattr(plan, "source", None) or "trainer") == "ai":
+            raise ForbiddenError(
+                "AI solo plans can only be edited by the trainee who owns them.",
+                code="PLAN_LOCKED",
+            )
+        assignees = self.assignments.list_for_plan(plan.id)
         # When client sends a full create-shaped body (all core fields + schedule),
         # reuse create validation path for consistency.
         data = payload.model_dump(exclude_unset=True)
@@ -168,7 +284,9 @@ class TrainerService:
             plan.exercises.clear()
             self._apply_plan_payload(plan, create_shaped)
             loaded = self.plans.get(plan.id)
-            return plan_out(loaded or plan)
+            out = plan_out(loaded or plan)
+            self._notify_assignees_plan_updated(trainer_id, loaded or plan, assignees)
+            return out
 
         if payload.title is not None:
             title = payload.title.strip()
@@ -205,15 +323,37 @@ class TrainerService:
                     flat_in if payload.exercises is not None else [],
                 )
         loaded = self.plans.get(plan.id)
-        return plan_out(loaded or plan)
+        out = plan_out(loaded or plan)
+        self._notify_assignees_plan_updated(trainer_id, loaded or plan, assignees)
+        return out
 
     def delete_plan(self, trainer_id: str, plan_id: str) -> None:
         """Soft-delete plan and clear active assignments. Workout logs are preserved."""
         plan = self.plans.get(plan_id)
         if plan is None or plan.trainer_id != trainer_id:
             raise NotFoundError("Workout plan not found.")
+        if (getattr(plan, "source", None) or "trainer") == "ai":
+            raise ForbiddenError(
+                "AI solo plans can only be deleted by the trainee who owns them.",
+                code="PLAN_LOCKED",
+            )
+        plan_title = plan.title
         plan.deleted_at = _utc_now()
-        self.assignments.clear_for_plan(plan.id)
+        cleared = self.assignments.clear_for_plan(plan.id)
+        trainer = self.trainers.get(trainer_id)
+        trainer_user_id = trainer.user_id if trainer else ""
+        for row in cleared:
+            trainee = row.trainee or self.trainees.get(row.trainee_id)
+            if trainee is None:
+                continue
+            self._notify_plan(
+                action="unassigned",
+                trainer_id=trainer_id,
+                trainer_user_id=trainer_user_id,
+                trainee=trainee,
+                plan_id=plan_id,
+                plan_title=plan_title,
+            )
 
     def unassign_plan(
         self,
@@ -237,7 +377,20 @@ class TrainerService:
         plan = self.plans.get(assignment.plan_id, include_deleted=True)
         if plan is not None and plan.trainer_id and plan.trainer_id != trainer_id:
             raise NotFoundError("Assignment not found.")
+        trainee = assignment.trainee or self.trainees.get(assignment.trainee_id)
+        cleared_plan_id = assignment.plan_id
+        cleared_title = plan.title if plan is not None else "workout plan"
         self.assignments.delete(assignment)
+        if trainee is not None:
+            trainer = self.trainers.get(trainer_id)
+            self._notify_plan(
+                action="unassigned",
+                trainer_id=trainer_id,
+                trainer_user_id=trainer.user_id if trainer else "",
+                trainee=trainee,
+                plan_id=cleared_plan_id,
+                plan_title=cleared_title,
+            )
 
     def save_trainer_assessment(
         self,
@@ -395,7 +548,76 @@ class TrainerService:
             assigned_at=_utc_now(),
         )
         self.assignments.replace(assignment)
+        trainee = self.trainees.get(payload.trainee_id)
+        trainer = self.trainers.get(trainer_id)
+        if trainee is not None and trainer is not None:
+            self._notify_plan(
+                action="assigned",
+                trainer_id=trainer_id,
+                trainer_user_id=trainer.user_id,
+                trainee=trainee,
+                plan_id=plan.id,
+                plan_title=plan.title,
+            )
         return AssignmentResponse(assignment=assignment_out(assignment), plan=plan_out(plan))
+
+    def _notify_assignees_plan_updated(
+        self,
+        trainer_id: str,
+        plan: models.WorkoutPlan,
+        assignees: list[models.PlanAssignment],
+    ) -> None:
+        if not assignees:
+            return
+        trainer = self.trainers.get(trainer_id)
+        trainer_user_id = trainer.user_id if trainer else ""
+        for row in assignees:
+            trainee = row.trainee or self.trainees.get(row.trainee_id)
+            if trainee is None:
+                continue
+            self._notify_plan(
+                action="updated",
+                trainer_id=trainer_id,
+                trainer_user_id=trainer_user_id,
+                trainee=trainee,
+                plan_id=plan.id,
+                plan_title=plan.title,
+            )
+
+    def _notify_plan(
+        self,
+        *,
+        action: str,
+        trainer_id: str,
+        trainer_user_id: str,
+        trainee: models.TraineeProfile,
+        plan_id: str,
+        plan_title: str,
+    ) -> None:
+        trainer_name = "Your trainer"
+        user = self.users.get(trainer_user_id) if trainer_user_id else None
+        if user is not None:
+            trainer_name = user.name
+        try:
+            self.push.notify_plan_assignment_changed_sync(
+                action=action,
+                peer_trainee_user_id=trainee.user_id,
+                actor_trainer_user_id=trainer_user_id or None,
+                plan_id=plan_id,
+                plan_title=plan_title,
+                trainer_user_id=trainer_user_id,
+                trainee_user_id=trainee.user_id,
+                trainee_profile_id=trainee.id,
+                trainer_name=trainer_name,
+            )
+        except Exception:
+            log.exception(
+                "plan_assignment_notify_failed",
+                action=action,
+                plan_id=plan_id,
+                trainee_id=trainee.id,
+                trainer_id=trainer_id,
+            )
 
     def trainee_meals(self, trainer_id: str, trainee_id: str, on_date) -> list[MealOut]:
         require_owned_trainee(self.trainees, trainer_id, trainee_id)

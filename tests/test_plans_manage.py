@@ -85,6 +85,16 @@ def _minimal_plan_body(title: str = "Contract plan") -> dict:
     }
 
 
+def _inbox_of_type(client: TestClient, token: str, notif_type: str, *, plan_id: str | None = None) -> list:
+    inbox = client.get("/me/notifications", headers=_auth(token))
+    assert inbox.status_code == 200, inbox.text
+    items = inbox.json()["items"]
+    matched = [n for n in items if n["type"] == notif_type]
+    if plan_id is not None:
+        matched = [n for n in matched if (n.get("data") or {}).get("planId") == plan_id]
+    return matched
+
+
 def test_patch_plan_updates_list_and_assigned(client: TestClient, actors: dict) -> None:
     trainer = actors["trainer"]
     trainee = actors["trainee"]
@@ -115,6 +125,7 @@ def test_patch_plan_updates_list_and_assigned(client: TestClient, actors: dict) 
         json={"planId": plan_id, "traineeId": trainee["trainee_id"]},
     )
     assert assign.status_code == 201, assign.text
+    assert _inbox_of_type(client, trainee["token"], "plan_assigned", plan_id=plan_id)
 
     assigned = client.get("/trainee/assigned-plan", headers=_auth(trainee["token"]))
     assert assigned.status_code == 200
@@ -129,6 +140,9 @@ def test_patch_plan_updates_list_and_assigned(client: TestClient, actors: dict) 
     assert again.status_code == 200
     assigned2 = client.get("/trainee/assigned-plan", headers=_auth(trainee["token"]))
     assert assigned2.json()["title"] == "Live update"
+    updated = _inbox_of_type(client, trainee["token"], "plan_updated", plan_id=plan_id)
+    assert updated
+    assert updated[0]["data"].get("action") == "updated"
 
 
 def test_unassign_by_query_idempotent(client: TestClient, actors: dict) -> None:
@@ -154,6 +168,7 @@ def test_unassign_by_query_idempotent(client: TestClient, actors: dict) -> None:
     )
     assert first.status_code == 204
     assert client.get("/trainee/assigned-plan", headers=_auth(trainee["token"])).json() is None
+    assert _inbox_of_type(client, trainee["token"], "plan_unassigned", plan_id=plan_id)
 
     second = client.delete(
         f"/trainer/assignments?planId={plan_id}&traineeId={trainee['trainee_id']}",
@@ -198,6 +213,7 @@ def test_delete_plan_soft_clears_assignment_keeps_logs(client: TestClient, actor
     listed = client.get("/trainer/plans", headers=_auth(trainer["token"]))
     assert all(p["id"] != plan_id for p in listed.json())
     assert client.get("/trainee/assigned-plan", headers=_auth(trainee["token"])).json() is None
+    assert _inbox_of_type(client, trainee["token"], "plan_unassigned", plan_id=plan_id)
 
     logs = client.get("/trainee/logs", headers=_auth(trainee["token"]))
     assert logs.status_code == 200

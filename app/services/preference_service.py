@@ -43,11 +43,23 @@ class PreferenceService:
         merged = {**default_notifications(), **(row.notifications or {})}
         return NotificationPreferences.model_validate(merged)
 
-    def save_notifications(self, user_id: str, payload: NotificationPreferences) -> NotificationPreferences:
+    def save_notifications(
+        self, user_id: str, payload: NotificationPreferences | dict
+    ) -> NotificationPreferences:
+        """Upsert notification prefs. Full object or partial dict (merge with existing)."""
         row = self._ensure(user_id)
-        # Always persist full object with defaults so all 10 keys survive round-trips.
-        merged = {**default_notifications(), **payload.model_dump(by_alias=True)}
+        existing = {**default_notifications(), **(row.notifications or {})}
+        if isinstance(payload, NotificationPreferences):
+            merged = {**existing, **payload.model_dump(by_alias=True)}
+        else:
+            patch = {
+                str(k): v
+                for k, v in (payload or {}).items()
+                if isinstance(v, bool)
+            }
+            merged = {**existing, **patch}
         saved = NotificationPreferences.model_validate(merged)
+        # Persist all 10 keys in camelCase so re-GET always matches iOS schema.
         row.notifications = saved.model_dump(by_alias=True)
         row.updated_at = _utc_now()
         return saved

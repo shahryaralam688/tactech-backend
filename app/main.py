@@ -12,6 +12,7 @@ from sqlalchemy import text
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.routers import (
+    admin_exercises,
     admin_verification,
     auth,
     billing,
@@ -78,6 +79,7 @@ app.include_router(coach.router)
 app.include_router(coaches.router)
 app.include_router(billing.router)
 app.include_router(admin_verification.router)
+app.include_router(admin_exercises.router)
 app.include_router(chat.router)
 ensure_upload_dir(settings)
 app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")

@@ -30,9 +30,11 @@ from app.services.entitlement_service import EntitlementService
 from app.services.review_service import ReviewService
 from app.services.analytics_service import AnalyticsService
 from app.services.sandow_service import SandowService
+from app.services.exercise_admin_service import ExerciseAdminService
 from app.services.verification_service import VerificationService
 from app.services.package_service import PackageService
 from app.services.follow_service import FollowService
+from app.services.join_request_service import JoinRequestService
 from app.realtime.chat_hub import chat_hub
 
 Role = Literal["trainer", "trainee"]
@@ -104,6 +106,15 @@ def get_coach_service(
     return CoachService(db, settings)
 
 
+def get_ai_program_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    from app.services.ai_program_service import AiProgramService
+
+    return AiProgramService(db, settings)
+
+
 def get_entitlement_service(db: Annotated[Session, Depends(get_db)]) -> EntitlementService:
     return EntitlementService(db)
 
@@ -124,6 +135,13 @@ def get_sandow_service(db: Annotated[Session, Depends(get_db)]) -> SandowService
     return SandowService(db)
 
 
+def get_exercise_admin_service(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ExerciseAdminService:
+    return ExerciseAdminService(db, settings)
+
+
 def get_verification_service(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -138,6 +156,10 @@ def get_package_service(db: Annotated[Session, Depends(get_db)]) -> PackageServi
 
 def get_follow_service(db: Annotated[Session, Depends(get_db)]) -> FollowService:
     return FollowService(db)
+
+
+def get_join_request_service(db: Annotated[Session, Depends(get_db)]) -> JoinRequestService:
+    return JoinRequestService(db)
 
 
 def require_admin_key(

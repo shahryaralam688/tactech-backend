@@ -172,6 +172,8 @@ class AssessmentService:
         plan = models.WorkoutPlan(
             id=str(uuid4()),
             trainer_id=trainee.trainer_id,
+            source="trainer" if trainee.trainer_id else "ai",
+            owner_trainee_id=None if trainee.trainer_id else trainee.id,
             title=plan_data["title"],
             focus=plan_data["focus"],
             duration_minutes=plan_data["durationMinutes"],

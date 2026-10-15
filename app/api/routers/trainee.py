@@ -1,9 +1,15 @@
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
-from app.api.deps import Principal, get_assessment_service, get_trainee_service, require_trainee
+from app.api.deps import (
+    Principal,
+    get_assessment_service,
+    get_join_request_service,
+    get_trainee_service,
+    require_trainee,
+)
 from app.schemas.assessment import AssessmentProgramOut, AssessmentRequest
 from app.services.assessment_service import AssessmentService
 from app.schemas.common import (
@@ -11,9 +17,14 @@ from app.schemas.common import (
     FormReportOut,
     MealOut,
     TrainerFeedbackOut,
-    TraineeProfileOut,
     WorkoutLogOut,
     WorkoutPlanOut,
+)
+from app.schemas.join_requests import (
+    JoinRequestCreate,
+    JoinRequestOut,
+    JoinRequestStatusOut,
+    TraineeJoinStateOut,
 )
 from app.schemas.requests import (
     CreateFormReportRequest,
@@ -21,9 +32,12 @@ from app.schemas.requests import (
     CreateWorkoutLogRequest,
     LinkTrainerRequest,
     UpdateMealRequest,
+    UpdatePlanRequest,
     UpdateWorkoutLogRequest,
 )
 from app.schemas.responses import DailyMacrosResponse, TrainerPublic
+from app.schemas.roster import UnlinkOut
+from app.services.join_request_service import JoinRequestService
 from app.services.trainee_service import TraineeService
 
 router = APIRouter(prefix="/trainee", tags=["trainee"])
@@ -46,13 +60,74 @@ def latest_assessment(
     return service.latest_for_trainee(principal.trainee_id)  # type: ignore[arg-type]
 
 
-@router.post("/link", response_model=TraineeProfileOut)
+@router.post(
+    "/join-requests",
+    response_model=JoinRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_join_request(
+    payload: JoinRequestCreate,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+) -> JoinRequestOut:
+    """Create a pending join request (does not activate roster until trainer Accept)."""
+    return service.create(
+        trainee_id=principal.trainee_id,  # type: ignore[arg-type]
+        trainee_user_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@router.get("/join-requests/mine", response_model=TraineeJoinStateOut)
+def my_join_state(
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+) -> TraineeJoinStateOut:
+    return service.mine(
+        trainee_id=principal.trainee_id,  # type: ignore[arg-type]
+        trainee_user_id=principal.user_id,
+    )
+
+
+@router.post("/join-requests/{request_id}/cancel", response_model=JoinRequestStatusOut)
+def cancel_join_request(
+    request_id: str,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+) -> JoinRequestStatusOut:
+    return service.cancel(trainee_user_id=principal.user_id, request_id=request_id)
+
+
+@router.post(
+    "/link",
+    response_model=JoinRequestOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Alias: create pending join request (no longer auto-links)",
+)
 def link_trainer(
     payload: LinkTrainerRequest,
     principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+) -> JoinRequestOut:
+    """Breaking: formerly instant-linked. Now creates a pending join request (Option 1)."""
+    return service.create(
+        trainee_id=principal.trainee_id,  # type: ignore[arg-type]
+        trainee_user_id=principal.user_id,
+        payload=JoinRequestCreate(invite_code=payload.invite_code, message=None),
+    )
+
+
+@router.post("/unlink", response_model=UnlinkOut)
+def unlink_trainer(
+    principal: Annotated[Principal, Depends(require_trainee)],
     service: Annotated[TraineeService, Depends(get_trainee_service)],
-) -> TraineeProfileOut:
-    return service.link_trainer(principal.trainee_id, payload.invite_code)  # type: ignore[arg-type]
+    _body: dict[str, Any] | None = Body(default=None),
+) -> UnlinkOut:
+    """Trainee leaves trainer roster — clears plan assignment; chat kept.
+
+    Accepts empty body, `{}`, or no body (iOS Leave sends empty JSON).
+    """
+    return service.unlink_trainer(principal.trainee_id)  # type: ignore[arg-type]
 
 
 @router.get("/trainer", response_model=TrainerPublic | None)
@@ -60,6 +135,7 @@ def my_trainer(
     principal: Annotated[Principal, Depends(require_trainee)],
     service: Annotated[TraineeService, Depends(get_trainee_service)],
 ) -> TrainerPublic | None:
+    """Linked trainer, or null when unlinked (200)."""
     return service.my_trainer(principal.trainee_id)  # type: ignore[arg-type]
 
 
@@ -69,6 +145,27 @@ def assigned_plan(
     service: Annotated[TraineeService, Depends(get_trainee_service)],
 ) -> WorkoutPlanOut | None:
     return service.assigned_plan(principal.trainee_id)  # type: ignore[arg-type]
+
+
+@router.patch("/ai-plans/{plan_id}", response_model=WorkoutPlanOut)
+def update_ai_plan(
+    plan_id: str,
+    payload: UpdatePlanRequest,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutPlanOut:
+    """Edit AI solo plan only (`source=ai`). Trainer plans → 403 PLAN_LOCKED."""
+    return service.update_ai_plan(principal.trainee_id, plan_id, payload)  # type: ignore[arg-type]
+
+
+@router.delete("/ai-plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_ai_plan(
+    plan_id: str,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> None:
+    """Delete AI solo plan only (`source=ai`). Clears assignment."""
+    service.delete_ai_plan(principal.trainee_id, plan_id)  # type: ignore[arg-type]
 
 
 @router.get("/logs", response_model=list[WorkoutLogOut])

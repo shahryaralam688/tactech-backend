@@ -110,9 +110,10 @@ def report_review(
 @router.get("/{coach_profile_id}/reviews/me", response_model=CoachReviewMineOut)
 def get_my_review(
     coach_profile_id: str,
-    principal: Annotated[Principal, Depends(require_trainee)],
+    principal: Annotated[Principal, Depends(get_principal)],
     service: Annotated[ReviewService, Depends(get_review_service)],
 ) -> CoachReviewMineOut:
+    """Own review (if any) + canReview / reason for Write/Edit affordances."""
     return service.get_mine(principal, coach_profile_id)
 
 

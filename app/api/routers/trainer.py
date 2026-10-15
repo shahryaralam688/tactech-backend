@@ -1,11 +1,12 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.api.deps import (
     Principal,
     get_assessment_service,
+    get_join_request_service,
     get_template_service,
     get_trainer_service,
     require_trainer,
@@ -21,6 +22,11 @@ from app.schemas.common import (
     WorkoutLogOut,
     WorkoutPlanOut,
 )
+from app.schemas.join_requests import (
+    JoinRequestOut,
+    JoinRequestStatusOut,
+    RejectJoinRequest,
+)
 from app.schemas.requests import (
     AssignPlanRequest,
     CreateFeedbackRequest,
@@ -29,11 +35,54 @@ from app.schemas.requests import (
     UpdatePlanRequest,
 )
 from app.schemas.responses import AssignmentResponse, TraineeAnalyticsOut, TraineeRosterItem
+from app.schemas.roster import RemoveTraineeOut
 from app.schemas.templates import ExerciseTemplateIn, ExerciseTemplateOut, UpdateExerciseTemplateRequest
+from app.services.join_request_service import JoinRequestService
 from app.services.template_service import TemplateService
 from app.services.trainer_service import TrainerService
 
 router = APIRouter(prefix="/trainer", tags=["trainer"])
+
+
+@router.get("/join-requests", response_model=list[JoinRequestOut])
+def list_join_requests(
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+    status_filter: str = Query(default="pending", alias="status"),
+) -> list[JoinRequestOut]:
+    """List join requests for this trainer. Default status=pending; also accepted|rejected|cancelled|all."""
+    return service.list_for_trainer(
+        trainer_user_id=principal.user_id,
+        status=status_filter,
+    )
+
+
+@router.post("/join-requests/{request_id}/accept", response_model=JoinRequestOut)
+def accept_join_request(
+    request_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+) -> JoinRequestOut:
+    return service.accept(
+        trainer_id=principal.trainer_id,  # type: ignore[arg-type]
+        trainer_user_id=principal.user_id,
+        request_id=request_id,
+    )
+
+
+@router.post("/join-requests/{request_id}/reject", response_model=JoinRequestStatusOut)
+def reject_join_request(
+    request_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[JoinRequestService, Depends(get_join_request_service)],
+    payload: RejectJoinRequest | None = Body(default=None),
+) -> JoinRequestStatusOut:
+    return service.reject(
+        trainer_id=principal.trainer_id,  # type: ignore[arg-type]
+        trainer_user_id=principal.user_id,
+        request_id=request_id,
+        payload=payload,
+    )
 
 
 @router.get("/trainees", response_model=list[TraineeRosterItem])
@@ -60,6 +109,16 @@ def get_trainee(
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> TraineeRosterItem:
     return service.get_trainee(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
+
+
+@router.post("/trainees/{trainee_id}/remove", response_model=RemoveTraineeOut)
+def remove_trainee(
+    trainee_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> RemoveTraineeOut:
+    """Trainer removes trainee from roster — clears plan assignment; chat kept."""
+    return service.remove_trainee(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
 
 
 @router.get("/trainees/{trainee_id}/meals", response_model=list[MealOut])
