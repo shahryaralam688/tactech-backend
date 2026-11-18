@@ -15,6 +15,7 @@ from app.repositories.plan import PlanRepository
 from app.repositories.trainee import TraineeRepository
 from app.repositories.trainer import TrainerRepository
 from app.repositories.workout_log import WorkoutLogRepository
+from app.repositories.workout_session import WorkoutSessionRepository
 from app.schemas.common import (
     FormReportOut,
     MacroEstimateOut,
@@ -23,6 +24,7 @@ from app.schemas.common import (
     TraineeProfileOut,
     WorkoutLogOut,
     WorkoutPlanOut,
+    WorkoutSessionOut,
 )
 from app.schemas.mappers import (
     feedback_out,
@@ -33,6 +35,7 @@ from app.schemas.mappers import (
     trainee_out,
     user_public,
     workout_log_out,
+    workout_session_out,
     plan_out,
 )
 from app.schemas.requests import (
@@ -40,6 +43,8 @@ from app.schemas.requests import (
     CreateMealRequest,
     CreatePlanRequest,
     CreateWorkoutLogRequest,
+    SaveSessionSetRequest,
+    StartWorkoutSessionRequest,
     UpdateMealRequest,
     UpdatePlanRequest,
     UpdateTraineeProfileRequest,
@@ -70,6 +75,7 @@ class TraineeService:
         self.coaching = CoachingRepository(db)
         self.exercises = ExerciseRepository(db)
         self.foods = FoodRepository(db)
+        self.sessions = WorkoutSessionRepository(db)
         self.roster = RosterLinkService(db)
         self.push = PushService(db, hub=chat_hub)
 
@@ -410,6 +416,94 @@ class TraineeService:
         if log is None or log.trainee_id != trainee_id:
             raise NotFoundError("Workout log not found.")
         self.logs.delete(log)
+
+    # ── Workout sessions (in-progress) ──────────────────────────
+
+    def start_session(self, trainee_id: str, payload: StartWorkoutSessionRequest) -> WorkoutSessionOut:
+        existing = self.sessions.get_active_for_trainee(trainee_id)
+        if existing:
+            raise ValidationAppError("You already have an active workout session. Complete or discard it first.")
+        if self.plans.get(payload.plan_id) is None:
+            raise NotFoundError("Workout plan not found.")
+        session = models.WorkoutSession(
+            id=str(uuid4()),
+            trainee_id=trainee_id,
+            plan_id=payload.plan_id,
+            plan_day_id=payload.plan_day_id,
+            status="active",
+            started_at=_utc_now(),
+        )
+        return workout_session_out(self.sessions.add(session))
+
+    def get_active_session(self, trainee_id: str) -> WorkoutSessionOut | None:
+        session = self.sessions.get_active_for_trainee(trainee_id)
+        return workout_session_out(session) if session else None
+
+    def save_session_set(self, trainee_id: str, session_id: str, payload: SaveSessionSetRequest) -> WorkoutSessionOut:
+        session = self.sessions.get(session_id)
+        if session is None or session.trainee_id != trainee_id:
+            raise NotFoundError("Workout session not found.")
+        if session.status != "active":
+            raise ValidationAppError("Session is not active.")
+        if self.exercises.get(payload.exercise_id) is None:
+            raise ValidationAppError(f"Unknown exercise: {payload.exercise_id}")
+        set_id = f"{session_id}_{payload.exercise_id}_{payload.set_number}"
+        s = models.WorkoutSessionSet(
+            id=set_id,
+            session_id=session_id,
+            exercise_id=payload.exercise_id,
+            set_number=payload.set_number,
+            reps=payload.reps,
+            weight_kg=payload.weight_kg,
+            finished_at=_utc_now(),
+        )
+        self.sessions.add_set(s)
+        reloaded = self.sessions.get(session_id)
+        return workout_session_out(reloaded or session)
+
+    def complete_session(self, trainee_id: str, session_id: str) -> WorkoutLogOut:
+        session = self.sessions.get(session_id)
+        if session is None or session.trainee_id != trainee_id:
+            raise NotFoundError("Workout session not found.")
+        if session.status != "active":
+            raise ValidationAppError("Session is already completed or discarded.")
+        if not session.sets:
+            raise ValidationAppError("No sets recorded. Log at least one set before completing.")
+        now = _utc_now()
+        duration = max(1, int((now - session.started_at).total_seconds() / 60))
+        log = models.WorkoutLog(
+            id=str(uuid4()),
+            trainee_id=trainee_id,
+            plan_id=session.plan_id,
+            completed_at=now,
+            duration_minutes=duration,
+            sets=[
+                models.WorkoutSetLog(
+                    id=str(uuid4()),
+                    exercise_id=s.exercise_id,
+                    set_number=s.set_number,
+                    reps=s.reps,
+                    weight_kg=s.weight_kg,
+                )
+                for s in session.sets
+            ],
+        )
+        self.logs.add(log)
+        session.status = "completed"
+        session.completed_at = now
+        session.workout_log_id = log.id
+        self.db.flush()
+        return workout_log_out(log)
+
+    def discard_session(self, trainee_id: str, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session is None or session.trainee_id != trainee_id:
+            raise NotFoundError("Workout session not found.")
+        if session.status != "active":
+            raise ValidationAppError("Session is already completed or discarded.")
+        session.status = "discarded"
+        session.completed_at = _utc_now()
+        self.db.flush()
 
     def daily_macros(self, trainee_id: str, on_date: date) -> DailyMacrosResponse:
         meals = self.list_meals(trainee_id, on_date)

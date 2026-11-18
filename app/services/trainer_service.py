@@ -15,8 +15,9 @@ from app.repositories.trainee import TraineeRepository
 from app.repositories.trainer import TrainerRepository
 from app.repositories.user import UserRepository
 from app.repositories.workout_log import WorkoutLogRepository
+from app.repositories.workout_session import WorkoutSessionRepository
 from app.schemas.assessment import TrainerAssessmentOut
-from app.schemas.common import MealOut, TrainerFeedbackOut, WorkoutPlanOut
+from app.schemas.common import MealOut, TrainerFeedbackOut, WorkoutPlanOut, WorkoutSessionOut
 from app.schemas.mappers import (
     assignment_out,
     feedback_out,
@@ -27,6 +28,7 @@ from app.schemas.mappers import (
     trainee_out,
     user_public,
     workout_log_out,
+    workout_session_out,
 )
 from app.schemas.requests import (
     WEEKDAYS,
@@ -56,6 +58,12 @@ from app.realtime.chat_hub import chat_hub
 
 log = get_logger("tactech.trainer")
 
+# A trainer only sees a trainee's active session if it had activity (latest set, or the
+# start when no set exists) within this window. Workouts normally last 45-120 min; 4 h
+# leaves room for long rests and a late first set, yet hides a session the trainee forgot
+# to finish so the trainer app never shows "training now" the next morning.
+LIVE_SESSION_MAX_IDLE = timedelta(hours=4)
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -68,6 +76,7 @@ class TrainerService:
         self.plans = PlanRepository(db)
         self.assignments = AssignmentRepository(db)
         self.logs = WorkoutLogRepository(db)
+        self.sessions = WorkoutSessionRepository(db)
         self.meals = MealRepository(db)
         self.coaching = CoachingRepository(db)
         self.exercises = ExerciseRepository(db)
@@ -630,6 +639,21 @@ class TrainerService:
     def trainee_logs(self, trainer_id: str, trainee_id: str):
         require_owned_trainee(self.trainees, trainer_id, trainee_id)
         return [workout_log_out(log) for log in self.logs.list_for_trainee(trainee_id)]
+
+    def trainee_active_session(self, trainer_id: str, trainee_id: str) -> WorkoutSessionOut | None:
+        """Live workout of an owned trainee; None when no active session or it is stale."""
+        require_owned_trainee(self.trainees, trainer_id, trainee_id)
+        session = self.sessions.get_newest_active_for_trainee(trainee_id)
+        if session is None:
+            return None
+
+        def _aware(dt: datetime) -> datetime:
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+        last_activity = max([_aware(session.started_at), *(_aware(s.finished_at) for s in session.sets)])
+        if _utc_now() - last_activity > LIVE_SESSION_MAX_IDLE:
+            return None
+        return workout_session_out(session)
 
     def trainee_analytics(
         self, trainer_id: str, trainee_id: str, *, period_days: int = 30

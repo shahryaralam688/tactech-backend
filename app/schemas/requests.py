@@ -155,6 +155,18 @@ class UpdateWorkoutLogRequest(RequestModel):
     sets: list[WorkoutSetLogIn] | None = None
 
 
+class StartWorkoutSessionRequest(RequestModel):
+    plan_id: str
+    plan_day_id: str | None = None
+
+
+class SaveSessionSetRequest(RequestModel):
+    exercise_id: str
+    set_number: int = Field(ge=1)
+    reps: int = Field(ge=0)
+    weight_kg: float = Field(ge=0)
+
+
 class TrainerAssessmentRequest(RequestModel):
     coaching_focus: str
     years_experience: int = Field(ge=0)

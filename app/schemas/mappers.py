@@ -9,6 +9,7 @@ from app.schemas.common import (
     PlanDayExerciseOut,
     PlanDayOut,
     PrescribedSetOut,
+    SessionSetOut,
     TrainerFeedbackOut,
     TrainerProfileOut,
     TraineeProfileOut,
@@ -16,6 +17,7 @@ from app.schemas.common import (
     WorkoutExerciseOut,
     WorkoutLogOut,
     WorkoutPlanOut,
+    WorkoutSessionOut,
     WorkoutSetLogOut,
 )
 
@@ -259,6 +261,30 @@ def workout_log_out(log: models.WorkoutLog) -> WorkoutLogOut:
                 weight_kg=item.weight_kg,
             )
             for item in log.sets
+        ],
+    )
+
+
+def workout_session_out(session: models.WorkoutSession) -> WorkoutSessionOut:
+    return WorkoutSessionOut(
+        id=session.id,
+        trainee_id=session.trainee_id,
+        plan_id=session.plan_id,
+        plan_day_id=session.plan_day_id,
+        status=session.status,
+        started_at=session.started_at,
+        completed_at=session.completed_at,
+        workout_log_id=session.workout_log_id,
+        sets=[
+            SessionSetOut(
+                id=s.id,
+                exercise_id=s.exercise_id,
+                set_number=s.set_number,
+                reps=s.reps,
+                weight_kg=s.weight_kg,
+                finished_at=s.finished_at,
+            )
+            for s in session.sets
         ],
     )
 

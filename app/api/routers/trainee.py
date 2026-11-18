@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query, status
 
 from app.api.deps import (
     Principal,
@@ -12,6 +12,7 @@ from app.api.deps import (
 )
 from app.schemas.assessment import AssessmentProgramOut, AssessmentRequest
 from app.services.assessment_service import AssessmentService
+from app.services.live_session_events import notify_trainer_session_changed
 from app.schemas.common import (
     FoodKnowledgeOut,
     FormReportOut,
@@ -19,6 +20,7 @@ from app.schemas.common import (
     TrainerFeedbackOut,
     WorkoutLogOut,
     WorkoutPlanOut,
+    WorkoutSessionOut,
 )
 from app.schemas.join_requests import (
     JoinRequestCreate,
@@ -31,6 +33,8 @@ from app.schemas.requests import (
     CreateMealRequest,
     CreateWorkoutLogRequest,
     LinkTrainerRequest,
+    SaveSessionSetRequest,
+    StartWorkoutSessionRequest,
     UpdateMealRequest,
     UpdatePlanRequest,
     UpdateWorkoutLogRequest,
@@ -202,6 +206,62 @@ def delete_log(
     service: Annotated[TraineeService, Depends(get_trainee_service)],
 ) -> None:
     service.delete_log(principal.trainee_id, log_id)  # type: ignore[arg-type]
+
+
+@router.post("/sessions", response_model=WorkoutSessionOut, status_code=status.HTTP_201_CREATED)
+def start_session(
+    payload: StartWorkoutSessionRequest,
+    background_tasks: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutSessionOut:
+    result = service.start_session(principal.trainee_id, payload)  # type: ignore[arg-type]
+    background_tasks.add_task(notify_trainer_session_changed, principal.trainee_id, result.id, "active", "started")
+    return result
+
+
+@router.get("/sessions/active", response_model=WorkoutSessionOut | None)
+def active_session(
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutSessionOut | None:
+    return service.get_active_session(principal.trainee_id)  # type: ignore[arg-type]
+
+
+@router.post("/sessions/{session_id}/sets", response_model=WorkoutSessionOut)
+def save_session_set(
+    session_id: str,
+    payload: SaveSessionSetRequest,
+    background_tasks: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutSessionOut:
+    result = service.save_session_set(principal.trainee_id, session_id, payload)  # type: ignore[arg-type]
+    background_tasks.add_task(notify_trainer_session_changed, principal.trainee_id, session_id, "active", "set_logged")
+    return result
+
+
+@router.post("/sessions/{session_id}/complete", response_model=WorkoutLogOut)
+def complete_session(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> WorkoutLogOut:
+    result = service.complete_session(principal.trainee_id, session_id)  # type: ignore[arg-type]
+    background_tasks.add_task(notify_trainer_session_changed, principal.trainee_id, session_id, "completed", "completed")
+    return result
+
+
+@router.post("/sessions/{session_id}/discard", status_code=status.HTTP_204_NO_CONTENT)
+def discard_session(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_trainee)],
+    service: Annotated[TraineeService, Depends(get_trainee_service)],
+) -> None:
+    service.discard_session(principal.trainee_id, session_id)  # type: ignore[arg-type]
+    background_tasks.add_task(notify_trainer_session_changed, principal.trainee_id, session_id, "discarded", "discarded")
 
 
 @router.get("/meals", response_model=list[MealOut])

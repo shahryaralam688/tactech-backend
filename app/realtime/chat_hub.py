@@ -82,6 +82,10 @@ class ChatHub:
         """Domain event for assigned-plan refresh (room user:{userId}, / + /chat)."""
         await self._emit_to_user(user_id, "plan.assignment.changed", payload)
 
+    async def emit_workout_session_changed(self, user_id: str, payload: dict[str, Any]) -> None:
+        """Live-session domain event for the trainer app (room user:{userId}, / + /chat). Ids only."""
+        await self._emit_to_user(user_id, "workout.session.changed", payload)
+
     async def emit_to_thread(self, thread_id: str, event: str, payload: dict[str, Any]) -> None:
         room = f"chat:{thread_id}"
         for namespace in ("/", CHAT_NS):
@@ -125,6 +129,14 @@ async def _authenticate(environ: dict, auth: dict | None) -> str | None:
     token = None
     if isinstance(auth, dict):
         token = auth.get("token") or auth.get("accessToken")
+    if not token:
+        qs = environ.get("QUERY_STRING") or environ.get("asgi.scope", {}).get("query_string", b"")
+        if isinstance(qs, bytes):
+            qs = qs.decode()
+        for part in qs.split("&"):
+            if part.startswith("token="):
+                token = part[6:]
+                break
     if not token:
         headers = {
             k.decode().lower() if isinstance(k, bytes) else str(k).lower(): (

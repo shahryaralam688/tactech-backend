@@ -189,6 +189,27 @@ class WorkoutLogOut(APIModel):
     sets: list[WorkoutSetLogOut] = Field(default_factory=list)
 
 
+class SessionSetOut(APIModel):
+    id: str
+    exercise_id: str
+    set_number: int
+    reps: int
+    weight_kg: float
+    finished_at: datetime
+
+
+class WorkoutSessionOut(APIModel):
+    id: str
+    trainee_id: str
+    plan_id: str
+    plan_day_id: str | None = None
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    workout_log_id: str | None = None
+    sets: list[SessionSetOut] = Field(default_factory=list)
+
+
 class MacroEstimateOut(APIModel):
     calories: int
     protein: float

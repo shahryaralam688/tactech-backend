@@ -353,6 +353,45 @@ class WorkoutSetLog(Base):
     log: Mapped[WorkoutLog] = relationship(back_populates="sets")
 
 
+class WorkoutSession(Base):
+    __tablename__ = "workout_sessions"
+    __table_args__ = (
+        Index("ix_workout_sessions_trainee_status", "trainee_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trainee_id: Mapped[str] = mapped_column(ForeignKey("trainee_profiles.id", ondelete="CASCADE"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("workout_plans.id", ondelete="CASCADE"))
+    plan_day_id: Mapped[str | None] = mapped_column(ForeignKey("plan_days.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    workout_log_id: Mapped[str | None] = mapped_column(ForeignKey("workout_logs.id", ondelete="SET NULL"), nullable=True)
+
+    sets: Mapped[list["WorkoutSessionSet"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="WorkoutSessionSet.finished_at",
+    )
+
+
+class WorkoutSessionSet(Base):
+    __tablename__ = "workout_session_sets"
+    __table_args__ = (
+        UniqueConstraint("session_id", "exercise_id", "set_number", name="uq_session_exercise_set"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("workout_sessions.id", ondelete="CASCADE"), index=True)
+    exercise_id: Mapped[str] = mapped_column(ForeignKey("exercises.id", ondelete="RESTRICT"))
+    set_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_kg: Mapped[float] = mapped_column(Float, nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    session: Mapped[WorkoutSession] = relationship(back_populates="sets")
+
+
 class Meal(Base):
     __tablename__ = "meals"
 

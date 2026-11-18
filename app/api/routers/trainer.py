@@ -21,6 +21,7 @@ from app.schemas.common import (
     TrainerFeedbackOut,
     WorkoutLogOut,
     WorkoutPlanOut,
+    WorkoutSessionOut,
 )
 from app.schemas.join_requests import (
     JoinRequestOut,
@@ -148,6 +149,16 @@ def trainee_logs(
     service: Annotated[TrainerService, Depends(get_trainer_service)],
 ) -> list[WorkoutLogOut]:
     return service.trainee_logs(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
+
+
+@router.get("/trainees/{trainee_id}/sessions/active", response_model=WorkoutSessionOut | None)
+def trainee_active_session(
+    trainee_id: str,
+    principal: Annotated[Principal, Depends(require_trainer)],
+    service: Annotated[TrainerService, Depends(get_trainer_service)],
+) -> WorkoutSessionOut | None:
+    """Live workout of one of your trainees. 200 null when none active (or idle > 4 h)."""
+    return service.trainee_active_session(principal.trainer_id, trainee_id)  # type: ignore[arg-type]
 
 
 @router.get("/trainees/{trainee_id}/analytics", response_model=TraineeAnalyticsOut)
