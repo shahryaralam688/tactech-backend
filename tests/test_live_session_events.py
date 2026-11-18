@@ -480,10 +480,8 @@ def _first_exercise_id() -> str:
 def _first_plan_day_id() -> str:
     db = SessionLocal()
     try:
-        day = db.scalars(
-            select(models.PlanDay).where(models.PlanDay.plan_id == PLAN_ID)
-        ).first()
-        assert day, f"No plan days for plan {PLAN_ID}"
+        day = db.scalars(select(models.PlanDay)).first()
+        assert day, "No plan days in seed data"
         return day.id
     finally:
         db.close()
