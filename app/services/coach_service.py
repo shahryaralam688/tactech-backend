@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -25,7 +26,7 @@ from app.schemas.coach import (
     CoachVoiceTurnOut,
 )
 from app.ai.tools import TRAINER_TOOLS, ToolExecutor
-from app.services.ai.memory import CoachMemoryService
+from app.services.ai.memory import CoachMemoryService, DATA_BOUNDARY_NOTICE
 from app.ai.gateway import AiGateway
 from app.services.ai.providers import (
     EmbeddingProvider,
@@ -483,7 +484,9 @@ class CoachService:
             f"- {c['content']}" for c in citations
         ) or "- (no saved context yet — keep advice practical and ask one clarifying question)"
         system = (
-            f"{_system_prompt_for_role(principal.role)}\n\nUSER ROLE: {principal.role}\n"
+            f"{_system_prompt_for_role(principal.role)}\n\n"
+            f"{DATA_BOUNDARY_NOTICE}\n\n"
+            f"USER ROLE: {principal.role}\n"
             f"WHAT YOU KNOW ABOUT THIS USER:\n{memory_block}"
         )
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -498,6 +501,7 @@ class CoachService:
         principal: Principal,
         messages: list[dict[str, Any]],
         max_rounds: int = 5,
+        max_tool_calls: int = 5,
     ) -> str:
         """Run LLM with tools, execute any tool calls, and loop until a text reply."""
         if principal.role != "trainer" or not principal.trainer_id:
@@ -511,19 +515,39 @@ class CoachService:
             self.db, self.settings, principal.trainer_id, principal.user_id
         )
         working_messages = list(messages)
+        total_tool_calls = 0
+        content: str | None = None
 
         for _ in range(max_rounds):
-            result = await self.chat_provider.complete_with_tools(
-                working_messages,
-                TRAINER_TOOLS,
-                temperature=self.settings.ai_chat_temperature,
-                max_tokens=self.settings.ai_chat_max_tokens,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    self.chat_provider.complete_with_tools(
+                        working_messages,
+                        TRAINER_TOOLS,
+                        temperature=self.settings.ai_chat_temperature,
+                        max_tokens=self.settings.ai_chat_max_tokens,
+                    ),
+                    timeout=45.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("ai_tool_loop_timeout", user_id=principal.user_id)
+                return "The AI took too long to respond. Please try again."
+
             tool_calls = result.get("tool_calls")
             content = result.get("content")
 
             if not tool_calls:
                 return content or "Done."
+
+            # Enforce per-turn tool-call budget
+            remaining = max_tool_calls - total_tool_calls
+            if remaining <= 0:
+                log.warning("ai_tool_call_limit_reached", user_id=principal.user_id, limit=max_tool_calls)
+                return (
+                    "I reached the maximum number of actions allowed in one turn "
+                    f"({max_tool_calls}). Please send another message to continue."
+                )
+            tool_calls = tool_calls[:remaining]
 
             assistant_msg: dict[str, Any] = {"role": "assistant"}
             if content:
@@ -538,8 +562,8 @@ class CoachService:
                     args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                log.info("ai_tool_call", tool=name, args=args, user_id=principal.user_id)
                 tool_result = executor.execute(name, args)
+                total_tool_calls += 1
                 working_messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -547,7 +571,18 @@ class CoachService:
                     "content": tool_result,
                 })
 
-        return content or "I've completed the actions. Let me know if you need anything else."
+            if total_tool_calls >= max_tool_calls:
+                log.warning("ai_tool_call_limit_reached", user_id=principal.user_id, limit=max_tool_calls)
+                return (
+                    "I reached the maximum number of actions allowed in one turn "
+                    f"({max_tool_calls}). Please send another message to continue."
+                )
+
+        return (
+            content
+            or "I reached the maximum number of reasoning steps for this request. "
+            "Please send another message to continue."
+        )
 
     def _resolve_conversation(
         self, principal: Principal, conversation_id: str | None

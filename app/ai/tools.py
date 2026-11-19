@@ -24,6 +24,15 @@ from app.services.trainer_service import TrainerService
 
 log = get_logger("tactech.ai.tools")
 
+# Tools intentionally withheld from the model — require a human confirmation
+# step before they can be re-enabled.  Referenced here so they can be found
+# and enabled in a future confirmation-gate feature.
+_DESTRUCTIVE_TOOLS_DISABLED: list[str] = [
+    "remove_trainee",
+    "reject_join_request",
+    "unassign_plan",
+]
+
 TRAINER_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -105,20 +114,6 @@ TRAINER_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "unassign_plan",
-            "description": "Remove a trainee's current plan assignment.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trainee_id": {"type": "string", "description": "The trainee profile ID"},
-                },
-                "required": ["trainee_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "send_feedback",
             "description": "Send coaching feedback to a trainee.",
             "parameters": {
@@ -154,35 +149,6 @@ TRAINER_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "reject_join_request",
-            "description": "Reject a trainee's join request with an optional reason.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "The join request ID"},
-                    "reason": {"type": "string", "description": "Optional rejection reason"},
-                },
-                "required": ["request_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "remove_trainee",
-            "description": "Remove a trainee from the roster (unlink them).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trainee_id": {"type": "string", "description": "The trainee profile ID to remove"},
-                },
-                "required": ["trainee_id"],
-            },
-        },
-    },
 ]
 
 
@@ -198,11 +164,20 @@ class ToolExecutor:
         self.join_service = JoinRequestService(db, settings)
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
+        if name in _DESTRUCTIVE_TOOLS_DISABLED:
+            log.warning("tool_disabled_refused", tool=name, trainer_id=self.trainer_id)
+            result = {"error": f"Tool '{name}' is not available. This action requires explicit confirmation and cannot be performed by the AI automatically."}
+            return json.dumps(result)
         try:
-            result = self._dispatch(name, arguments)
-            return json.dumps(result, default=str)
+            raw = self._dispatch(name, arguments)
+            result_str = json.dumps(raw, default=str)
+            # Audit: log name, safe args (no secrets), and a short result summary
+            safe_args = {k: v for k, v in arguments.items() if k not in ("password", "token", "secret")}
+            summary = result_str[:200]
+            log.info("ai_tool_call", tool=name, args=safe_args, result_summary=summary, trainer_id=self.trainer_id)
+            return result_str
         except Exception as exc:
-            log.warning("tool_exec_error", tool=name, error=str(exc))
+            log.warning("tool_exec_error", tool=name, error=str(exc), trainer_id=self.trainer_id)
             return json.dumps({"error": str(exc)})
 
     def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
