@@ -225,7 +225,7 @@ class CoachMemoryService:
                     "source_id": assessment.id,
                     "content": _trim(
                         "Latest fitness assessment intake: "
-                        + json.dumps(assessment.payload, default=str)[:700]
+                        + _d(json.dumps(assessment.payload, default=str)[:700])
                     ),
                     "metadata": {"kind": "assessment"},
                 }
@@ -235,7 +235,7 @@ class CoachMemoryService:
                     "source_type": "assessment_result",
                     "source_id": assessment.id,
                     "content": _trim(
-                        "Assessment coach result: " + json.dumps(assessment.result, default=str)[:700]
+                        "Assessment coach result: " + _d(json.dumps(assessment.result, default=str)[:700])
                     ),
                     "metadata": {"kind": "assessment_result"},
                 }
@@ -376,7 +376,7 @@ class CoachMemoryService:
                     "source_type": "trainer_assessment",
                     "source_id": assessment.id,
                     "content": _trim(
-                        "Trainer coaching assessment: " + json.dumps(assessment.payload, default=str)[:800]
+                        "Trainer coaching assessment: " + _d(json.dumps(assessment.payload, default=str)[:800])
                     ),
                     "metadata": {"kind": "trainer_assessment"},
                 }
@@ -437,7 +437,7 @@ class CoachMemoryService:
             for a in assignments:
                 tname = a.trainee.user.name if a.trainee and a.trainee.user else a.trainee_id
                 pname = a.plan.title if a.plan else a.plan_id
-                lines.append(f"{tname} → {pname}")
+                lines.append(f"{_d(tname)} → {_d(pname)}")
             chunks.append({
                 "source_type": "plan_assignments",
                 "source_id": trainer.id,
@@ -467,7 +467,7 @@ class CoachMemoryService:
                     .where(models.TraineeProfile.id == tid)
                 ).first()
                 name = t_user.name if t_user else tid
-                lines.append(f"{name}: {row.total} workouts, {row.total_mins or 0}min total, last={row.last}")
+                lines.append(f"{_d(name)}: {row.total} workouts, {row.total_mins or 0}min total, last={row.last}")
             chunks.append({
                 "source_type": "workout_logs_summary",
                 "source_id": trainer.id,
@@ -502,7 +502,7 @@ class CoachMemoryService:
                     "source_type": "trainee_workout_detail",
                     "source_id": trainee_item.id,
                     "content": _trim(
-                        f"{t_user_name} recent workouts: " + " | ".join(log_lines)
+                        f"{_d(t_user_name)} recent workouts: " + " | ".join(log_lines)
                     ),
                     "metadata": {"kind": "workout_detail"},
                 })
@@ -548,7 +548,7 @@ class CoachMemoryService:
                     .where(models.TraineeProfile.id == fr.trainee_id)
                 ).first()
                 name = t_user.name if t_user else fr.trainee_id
-                lines.append(f"{name}: score={fr.score}, reps={fr.rep_count}")
+                lines.append(f"{_d(name)}: score={fr.score}, reps={fr.rep_count}")
             chunks.append({
                 "source_type": "form_reports",
                 "source_id": trainer.id,

@@ -24,6 +24,15 @@ from app.services.trainer_service import TrainerService
 
 log = get_logger("tactech.ai.tools")
 
+# Argument limits enforced inside the executor only — REST API and app are unaffected.
+_FEEDBACK_MAX_MSG = 2000
+_PLAN_MAX_TITLE = 120
+_PLAN_MAX_FOCUS = 120
+_PLAN_MAX_NOTES = 1000
+_PLAN_MAX_DAYS = 7
+_PLAN_MAX_EXERCISES_PER_DAY = 15
+_PLAN_MAX_SETS_PER_EXERCISE = 10
+
 # Tools intentionally withheld from the model — require a human confirmation
 # step before they can be re-enabled.  Referenced here so they can be found
 # and enabled in a future confirmation-gate feature.
@@ -230,18 +239,36 @@ class ToolExecutor:
         ]
 
     def _create_plan(self, args: dict) -> dict:
+        title = args["title"]
+        focus = args["focus"]
+        notes = args.get("notes")
         days_raw = args.pop("days", None) or []
+
+        if len(title) > _PLAN_MAX_TITLE:
+            return {"error": f"limit exceeded: title length {len(title)} exceeds {_PLAN_MAX_TITLE} characters."}
+        if len(focus) > _PLAN_MAX_FOCUS:
+            return {"error": f"limit exceeded: focus length {len(focus)} exceeds {_PLAN_MAX_FOCUS} characters."}
+        if notes and len(notes) > _PLAN_MAX_NOTES:
+            return {"error": f"limit exceeded: notes length {len(notes)} exceeds {_PLAN_MAX_NOTES} characters."}
+        if len(days_raw) > _PLAN_MAX_DAYS:
+            return {"error": f"limit exceeded: {len(days_raw)} days exceeds maximum of {_PLAN_MAX_DAYS}."}
+
         days = []
         for d in days_raw:
-            exercises = [
-                PlanDayExerciseIn(
+            raw_exercises = d.get("exercises") or []
+            if len(raw_exercises) > _PLAN_MAX_EXERCISES_PER_DAY:
+                return {"error": f"limit exceeded: {len(raw_exercises)} exercises in day '{d.get('weekday')}' exceeds maximum of {_PLAN_MAX_EXERCISES_PER_DAY}."}
+            exercises = []
+            for e in raw_exercises:
+                prescribed = e.get("prescribed_sets") or []
+                if len(prescribed) > _PLAN_MAX_SETS_PER_EXERCISE:
+                    return {"error": f"limit exceeded: {len(prescribed)} prescribed sets exceeds maximum of {_PLAN_MAX_SETS_PER_EXERCISE}."}
+                exercises.append(PlanDayExerciseIn(
                     exercise_id=e["exercise_id"],
                     sets=e.get("sets", 3),
                     reps=e.get("reps", 10),
                     rest_seconds=e.get("rest_seconds", 60),
-                )
-                for e in (d.get("exercises") or [])
-            ]
+                ))
             days.append(PlanDayIn(
                 weekday=d["weekday"],
                 title=d["title"],
@@ -250,12 +277,12 @@ class ToolExecutor:
                 exercises=exercises,
             ))
         payload = CreatePlanRequest(
-            title=args["title"],
-            focus=args["focus"],
+            title=title,
+            focus=focus,
             duration_minutes=args["duration_minutes"],
             level=args["level"],
             days_per_week=args["days_per_week"],
-            notes=args.get("notes"),
+            notes=notes,
             days=days,
         )
         plan = self.trainer_service.create_plan(self.trainer_id, payload)
@@ -274,9 +301,12 @@ class ToolExecutor:
         return {"status": "unassigned", "trainee_id": args["trainee_id"]}
 
     def _send_feedback(self, args: dict) -> dict:
+        msg = args["message"]
+        if len(msg) > _FEEDBACK_MAX_MSG:
+            return {"error": f"limit exceeded: message length {len(msg)} exceeds {_FEEDBACK_MAX_MSG} characters."}
         payload = CreateFeedbackRequest(
             trainee_id=args["trainee_id"],
-            message=args["message"],
+            message=msg,
             related_exercise_id=args.get("related_exercise_id"),
         )
         fb = self.trainer_service.save_feedback(self.trainer_id, payload)
