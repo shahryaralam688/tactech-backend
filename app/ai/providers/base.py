@@ -22,6 +22,22 @@ class TextLLMProvider(ABC):
     ) -> str:
         raise NotImplementedError
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        """Return {"content": str|None, "tool_calls": list|None}.
+
+        Default implementation ignores tools and returns text only.
+        Providers that support tool calling should override this.
+        """
+        text = await self.complete(messages, temperature=temperature, max_tokens=max_tokens)
+        return {"content": text, "tool_calls": None}
+
     async def stream(
         self,
         messages: list[dict[str, Any]],

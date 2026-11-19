@@ -107,6 +107,32 @@ class GroqTextProvider(TextLLMProvider):
             raise AppError("AI coach is temporarily unavailable.", status_code=502, code="AI_UPSTREAM")
         return response.json()["choices"][0]["message"]["content"].strip()
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.settings.groq_chat_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "tool_choice": "auto",
+        }
+        response = await self._post_with_rate_limit_retry(payload)
+        if response.status_code >= 400:
+            log.error("groq_tools_failed", status=response.status_code, body=response.text[:300])
+            raise AppError("AI coach is temporarily unavailable.", status_code=502, code="AI_UPSTREAM")
+        msg = response.json()["choices"][0]["message"]
+        return {
+            "content": (msg.get("content") or "").strip() or None,
+            "tool_calls": msg.get("tool_calls"),
+        }
+
     async def stream(
         self,
         messages: list[dict[str, Any]],

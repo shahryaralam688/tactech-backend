@@ -307,6 +307,290 @@ Do not remove Boost, human chat, trainer assign, Form Studio, or join flows.
 | 2026-10-16 | PART E/F — Only AI-generated plans may be edited/deleted by trainee; trainer plans locked (`source` field). |
 | 2026-10-16 | Backend PART E shipped: `workout_plans.source` + `owner_trainee_id`; generate=`ai`; trainer create=`trainer`; `PATCH|DELETE /trainee/ai-plans/{id}` (delete → 204); assigned-plan returns `source`. |
 | 2026-10-16 | Doc synced with full PART F iOS prompt (source UX + ai-plans API). |
+| 2026-10-16 | PART G/H added — AI Tool Calling for trainer automation + trainee memory awareness. Core sellable AI feature. |
+
+---
+
+# PART G — BACKEND PROMPT (AI Tool Calling — Trainer Automation)
+
+You are a senior FastAPI engineer on **TacTech**.
+
+## Context — What is already built
+
+The following files already exist and are SHIPPED. **Do not rewrite them.** This prompt describes what they do so you can verify, fix bugs, or extend.
+
+### Architecture (already in place)
+
+```
+app/ai/
+  gateway.py              # Provider factory — auto-selects groq/gemini/openai/mock from env
+  tools.py                # 10 tool definitions + ToolExecutor class (NEW)
+  providers/
+    base.py               # TextLLMProvider base — has complete() + complete_with_tools() + stream()
+    text_groq.py           # Groq provider — complete_with_tools() sends tools + tool_choice: "auto"
+    text_gemini.py         # Gemini provider
+    text_openai.py         # OpenAI placeholder
+    text_mock.py           # Mock (returns canned response, no tool support)
+
+app/services/
+  coach_service.py         # CoachService — chat() and stream_chat() with _complete_with_tool_loop()
+  ai/memory.py             # MemoryService — _trainer_chunks() loads ALL trainer data as RAG context
+  ai_access.py             # Freemium quota gate — daily/weekly limits, entitlement checks
+  trainer_service.py       # TrainerService — real CRUD for trainees, plans, feedback
+  join_request_service.py  # JoinRequestService — accept/reject join requests
+```
+
+### How it works (the flow)
+
+1. **Trainer sends message** → `POST /coach/chat` or `/coach/stream-chat`
+2. **Memory loaded** → `_trainer_chunks()` builds RAG context with ALL trainer data:
+   - Trainee roster (names, goals, calories, assigned plans)
+   - All workout plans authored by trainer
+   - Trainee workout activity (total workouts, duration, last session)
+   - Trainer feedback given
+   - Form reports (exercise scores)
+   - Join requests (pending/accepted/rejected)
+   - Coach profile (headline, city, specialties, rating, verified)
+   - Coach reviews, followers, packages
+   - Chat thread summary
+3. **System prompt** tells the AI it can take actions using tools
+4. **`_complete_with_tool_loop()`** runs up to 5 rounds:
+   - Calls `complete_with_tools()` with `TRAINER_TOOLS` list
+   - If LLM returns `tool_calls` → `ToolExecutor.execute()` runs each one
+   - Tool results appended to messages → next LLM call
+   - Continues until LLM returns text content with no tool calls
+5. **ToolExecutor** dispatches to real `TrainerService` / `JoinRequestService` methods
+
+### 10 Tools available to trainer AI
+
+| Tool | What it does | Service method |
+|------|-------------|----------------|
+| `list_trainees` | List all trainees with names, goals, plans | `TrainerService.list_trainees()` |
+| `list_plans` | List all workout plans by trainer | `TrainerService.list_plans()` |
+| `create_plan` | Create new plan (title, focus, level, days) | `TrainerService.create_plan()` |
+| `assign_plan` | Assign plan to trainee | `TrainerService.assign_plan()` |
+| `unassign_plan` | Remove trainee's plan | `TrainerService.unassign_plan()` |
+| `send_feedback` | Send feedback message to trainee | `TrainerService.save_feedback()` |
+| `list_join_requests` | List pending join requests | `JoinRequestService.list_for_trainer()` |
+| `accept_join_request` | Accept a join request | `JoinRequestService.accept()` |
+| `reject_join_request` | Reject with optional reason | `JoinRequestService.reject()` |
+| `remove_trainee` | Remove trainee from roster | `TrainerService.remove_trainee()` |
+
+### Trainee AI (no tools, memory-only)
+
+Trainee AI does NOT have tool calling. It uses RAG memory context only:
+- Their assigned plan and exercises
+- Workout logs and progress
+- Coach feedback received
+- Goals, calories, meals
+- Form reports
+
+Trainee AI answers questions like "What's my workout today?", "Am I on track?", form tips, nutrition guidance.
+
+### Freemium (already enforced)
+
+| | Free | Subscribed (Apple IAP) |
+|---|---|---|
+| AI chat messages | `AI_FREE_CHAT_DAILY_LIMIT` (default 10/day) | Unlimited |
+| AI plan generation | `AI_FREE_PLAN_GENERATIONS` (default 1 lifetime) | Unlimited |
+| Tool actions | Within chat limit | Unlimited |
+| Over limit | 402 `AI_QUOTA_EXCEEDED` | N/A |
+
+### Env config
+
+```env
+# Provider (auto = try gemini → groq → openai → mock)
+AI_TEXT_PROVIDER=auto
+GROQ_API_KEY=gsk_...          # Free tier: 30 req/min, 14400/day
+
+# Freemium limits
+AI_FREE_CHAT_DAILY_LIMIT=10
+AI_FREE_TEASE_MESSAGES_PER_WEEK=0
+AI_FREE_PLAN_GENERATIONS=1
+```
+
+## What to verify / extend
+
+If you are asked to work on this feature, here is what to check:
+
+1. **Tool calling works end-to-end**: trainer says "list my trainees" → AI calls `list_trainees` tool → returns real data
+2. **Multi-step chains work**: "assign my first plan to Ahmed" → AI calls `list_trainees` + `list_plans` → picks correct IDs → calls `assign_plan`
+3. **Memory context is complete**: trainer asks "how is Ahmed doing?" → AI has Ahmed's workout logs, plan, feedback in RAG context
+4. **Trainee AI has no tools**: trainee can only ask questions, not take actions
+5. **Freemium gate fires**: free user hits daily limit → 402 → paywall
+6. **Streaming**: trainers use tool loop (non-streaming until final response), trainees use SSE streaming
+
+## Do not break
+
+`/coach/chat` SSE contract, `/coach/stream-chat`, memory sync, trainee assessment, plan source lock, boost billing, join requests, human `/chat/*`.
+
+---
+
+## MANDATORY OUTPUT — Backend Tool Calling Verification Report
+
+```
+## AI Tool Calling — Backend Verification Report
+
+### A) Tool calling
+- complete_with_tools() on provider? (YES/NO)
+- _complete_with_tool_loop() in CoachService? (YES/NO)
+- Max tool rounds: ___
+- Tools count: ___
+
+### B) Tools working
+- list_trainees returns real data? (YES/NO)
+- list_plans returns real data? (YES/NO)
+- create_plan creates in DB? (YES/NO)
+- assign_plan assigns? (YES/NO)
+- send_feedback saves? (YES/NO)
+- accept_join_request works? (YES/NO)
+
+### C) Memory context
+- Trainer chunks include: roster / plans / logs / feedback / join requests / reviews / profile? (YES/NO)
+- Trainee chunks include: plan / logs / goals / feedback? (YES/NO)
+
+### D) Roles
+- Trainer gets tools? (YES/NO)
+- Trainee gets tools? (NO = correct)
+
+### E) Freemium
+- Daily limit enforced? (YES/NO) limit: ___
+- Over limit → 402? (YES/NO)
+
+### F) Files involved
+- (paths)
+
+### G) Manual tests
+1. "List my trainees" → tool call → real data: PASS/FAIL
+2. "Create a beginner strength plan" → plan in DB: PASS/FAIL
+3. "Assign it to my first trainee" → multi-step chain: PASS/FAIL
+4. "How is [trainee] doing?" → memory answer: PASS/FAIL
+5. Trainee asks question → no tool call, memory answer: PASS/FAIL
+6. Free user hits limit → 402: PASS/FAIL
+
+### H) Gaps
+- ___
+```
+
+---
+
+# PART H — iOS PROMPT (AI Tool Calling — Frontend Support)
+
+You are a senior SwiftUI engineer on **TacTech Trainer iOS**.
+
+## Context — What the backend does
+
+The backend AI now has **tool calling**. When a trainer asks the AI to do something (list trainees, create plan, assign plan, send feedback, accept/reject join requests), the AI executes it on the backend and replies with confirmation.
+
+**This is invisible to the frontend.** The AI chat API (`POST /coach/chat` and `/coach/stream-chat`) works exactly the same — trainer sends a message, gets a text response back. The tool execution happens server-side between the user's message and the AI's reply.
+
+## What the frontend needs to do
+
+### 1. Nothing changes in the chat UI
+
+The chat API contract is unchanged. The AI response may take slightly longer (1-3 extra seconds) because the backend runs tool calls before responding. No timeout changes needed — existing timeouts are sufficient.
+
+### 2. Suggested prompts (already in app)
+
+The app already shows suggestion chips: `"Draft a 4-day plan"`, `"Check trainee progress"`, `"Write form cues"`.
+
+**Update or add these suggested prompts for trainers** to showcase the AI's action capabilities:
+
+```swift
+// Trainer suggestions — showcase tool calling
+[
+    "List all my trainees",
+    "Create a beginner strength plan",
+    "Show pending join requests",
+    "How is my trainee doing?"
+]
+```
+
+For trainees, keep motivational/informational suggestions:
+```swift
+[
+    "What's my workout today?",
+    "Am I on track this week?",
+    "Give me form tips",
+    "Nutrition ideas for my goal"
+]
+```
+
+### 3. Handle data changes after AI actions
+
+When the AI assigns a plan, accepts a join request, or creates a plan, the **data on other screens changes**. The frontend should:
+
+- **Refresh trainee list** after returning from AI chat (the AI may have accepted a join request → new trainee appeared)
+- **Refresh plans list** after returning from AI chat (the AI may have created a new plan)
+- **Refresh assigned plan** for trainee (the AI may have assigned/unassigned)
+
+Implementation: trigger a data refresh when the user navigates back from the AI chat screen. This can be a simple `onAppear` reload or a notification-based approach.
+
+### 4. Paywall — already working
+
+402 `AI_QUOTA_EXCEEDED` → show existing AI paywall. No changes needed.
+
+### 5. Toast for AI actions (optional enhancement)
+
+When the AI's response mentions it took an action ("I've assigned the plan" / "Feedback sent"), the frontend could show a subtle success indicator. This is optional — the AI's text reply already confirms the action.
+
+## Do not break
+
+- Existing chat UI, SSE streaming, message history
+- Boost, join requests, plan management screens
+- Form Studio, human chat, trainer plan assign
+- Assessment flow
+
+## Do not
+
+- Add any tool-calling logic on the frontend — it's 100% backend
+- Change the chat API contract
+- Add new API endpoints — everything uses existing `/coach/chat` and `/coach/stream-chat`
+
+---
+
+## MANDATORY OUTPUT — iOS Tool Calling Verification Report
+
+```
+## AI Tool Calling — iOS Verification Report
+
+### A) Chat UI
+- Chat still works with longer AI responses? (YES/NO)
+- SSE streaming preserved? (YES/NO)
+- Message history unchanged? (YES/NO)
+
+### B) Suggested prompts
+- Trainer suggestions updated for actions? (YES/NO)
+- Trainee suggestions updated for guidance? (YES/NO)
+
+### C) Data refresh
+- Trainee list refreshes after chat? (YES/NO)
+- Plans list refreshes after chat? (YES/NO)
+- Assigned plan refreshes? (YES/NO)
+
+### D) Paywall
+- 402 → paywall still works? (YES/NO)
+
+### E) Features preserved
+- Boost? (YES/NO)
+- Join requests? (YES/NO)
+- Human chat? (YES/NO)
+- Form Studio? (YES/NO)
+- Plan management? (YES/NO)
+
+### F) Files touched
+- (paths)
+
+### G) Manual QA
+1. Trainer sends "list my trainees" → gets real list back: PASS/FAIL
+2. Trainer sends "create a plan" → plan appears in plans list: PASS/FAIL
+3. Trainee asks "what's my workout" → gets answer: PASS/FAIL
+4. Chat paywall at limit: PASS/FAIL
+5. All other screens still work: PASS/FAIL
+
+### H) Gaps
+- ___
+```
 
 ---
 

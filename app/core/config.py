@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     hf_chat_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     hf_vision_model: str = "google/gemma-3-4b-it"
     groq_api_key: str = ""
-    groq_chat_model: str = "openai/gpt-oss-20b"
+    groq_chat_model: str = "openai/gpt-oss-120b"
     groq_stt_model: str = "whisper-large-v3"
     openai_api_key: str = ""
     openai_chat_model: str = "gpt-4o-mini"
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # gemini | groq | openai | auto (gemini→groq→mock)
     ai_text_provider: str = "auto"
     gemini_api_key: str = ""
-    gemini_chat_model: str = "gemini-2.0-flash"
+    gemini_chat_model: str = "gemini-3.8-flash"
     ai_vision_pose_provider: str = "stub"
     ai_vision_food_provider: str = "stub"
     # Free daily AI chat messages without Pro (0 = no daily free; fall back to weekly tease / hard paywall)

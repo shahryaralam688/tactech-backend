@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from fastapi import Request, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
 from app.core.exceptions import AppError, ForbiddenError, NotFoundError, ValidationAppError
+from app.core.logging import get_logger
+
+log = get_logger("tactech.coach")
 from app.core.storage import absolute_media_url, delete_stored, ensure_upload_dir, public_base, read_image, save_bytes
 from app.db import models
 from app.repositories.coach import CoachRepository
@@ -21,6 +24,7 @@ from app.schemas.coach import (
     CoachRtcSessionOut,
     CoachVoiceTurnOut,
 )
+from app.ai.tools import TRAINER_TOOLS, ToolExecutor
 from app.services.ai.memory import CoachMemoryService
 from app.ai.gateway import AiGateway
 from app.services.ai.providers import (
@@ -45,10 +49,32 @@ Help with:
 - Trainee adherence, progress, and form cues
 - Assignment strategy across the roster
 - Professional, concise, actionable coaching tone
+- Answering questions about their trainees, reviews, followers, packages, verification, chats
+
+You know EVERYTHING about this trainer from MEMORY CONTEXT:
+- Profile (specialty, experience, bio, invite code)
+- Full trainee roster (names, goals, calories) and roster link history
+- Workout plans authored and plan assignments (which trainee has which plan)
+- Trainee workout activity (total workouts, duration, last session)
+- Trainer feedback given to trainees
+- Trainee form reports (exercise scores)
+- Join requests (pending/accepted/rejected)
+- Coach profile (headline, city, specialties, rating, reviews, verified status)
+- Coach followers and service packages
+- Chat thread summary (total threads, unread count)
+- Coach verification status
+
+You can TAKE ACTIONS using tools:
+- List trainees, create/assign/unassign workout plans
+- Send feedback to trainees
+- Accept/reject join requests, remove trainees
+When asked to do something, USE THE TOOLS — don't just describe what to do.
+Always call list_trainees or list_plans first to get IDs before assigning/modifying.
 
 How you talk:
 - Natural coach-to-coach chat — clear, warm, short (2–5 sentences or tight bullets).
-- Use MEMORY CONTEXT (roster, plans, logs, feedback). Prefer questions when data is missing.
+- Use MEMORY CONTEXT fully — answer with real data from it. Prefer questions when data is missing.
+- After executing a tool, confirm what you did in plain language.
 - Never invent medical diagnoses. Never dump raw JSON or memory scores.
 - Match the user's language (Urdu/English/Hinglish) when they use it.
 """
@@ -198,11 +224,7 @@ class CoachService:
         history = self.repo.list_messages(conversation.id, limit=12)
         llm_messages = self._build_messages(principal, citations, history, text)
 
-        reply = await self.chat_provider.complete(
-            llm_messages,
-            temperature=self.settings.ai_chat_temperature,
-            max_tokens=self.settings.ai_chat_max_tokens,
-        )
+        reply = await self._complete_with_tool_loop(principal, llm_messages)
 
         user_msg = self.repo.add_message(conversation, role="user", content=text, modality=modality)
         audio_url = None
@@ -251,29 +273,45 @@ class CoachService:
             }
         )
 
-        parts: list[str] = []
-        try:
-            async for delta in self.chat_provider.stream(
-                llm_messages,
-                temperature=self.settings.ai_chat_temperature,
-                max_tokens=self.settings.ai_chat_max_tokens,
-            ):
-                parts.append(delta)
-                yield json.dumps({"event": "delta", "text": delta})
-        except AppError as exc:
-            # Keep user message; surface error cleanly to SSE consumer
-            yield json.dumps(
-                {
-                    "event": "error",
-                    "detail": exc.message,
-                    "code": exc.code or "AI_ERROR",
-                    "statusCode": exc.status_code,
-                    "conversationId": conversation.id,
-                }
-            )
-            return
-
-        reply = "".join(parts).strip() or "Sorry — I could not generate a reply."
+        # Use tool loop for trainers, plain stream for trainees
+        if principal.role == "trainer" and principal.trainer_id:
+            try:
+                reply = await self._complete_with_tool_loop(principal, llm_messages)
+            except AppError as exc:
+                yield json.dumps(
+                    {
+                        "event": "error",
+                        "detail": exc.message,
+                        "code": exc.code or "AI_ERROR",
+                        "statusCode": exc.status_code,
+                        "conversationId": conversation.id,
+                    }
+                )
+                return
+            # Emit entire reply as a single delta for SSE
+            yield json.dumps({"event": "delta", "text": reply})
+        else:
+            parts: list[str] = []
+            try:
+                async for delta in self.chat_provider.stream(
+                    llm_messages,
+                    temperature=self.settings.ai_chat_temperature,
+                    max_tokens=self.settings.ai_chat_max_tokens,
+                ):
+                    parts.append(delta)
+                    yield json.dumps({"event": "delta", "text": delta})
+            except AppError as exc:
+                yield json.dumps(
+                    {
+                        "event": "error",
+                        "detail": exc.message,
+                        "code": exc.code or "AI_ERROR",
+                        "statusCode": exc.status_code,
+                        "conversationId": conversation.id,
+                    }
+                )
+                return
+            reply = "".join(parts).strip() or "Sorry — I could not generate a reply."
         assistant_msg = self.repo.add_message(
             conversation,
             role="assistant",
@@ -454,6 +492,62 @@ class CoachService:
                 messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": user_text})
         return messages
+
+    async def _complete_with_tool_loop(
+        self,
+        principal: Principal,
+        messages: list[dict[str, Any]],
+        max_rounds: int = 5,
+    ) -> str:
+        """Run LLM with tools, execute any tool calls, and loop until a text reply."""
+        if principal.role != "trainer" or not principal.trainer_id:
+            return await self.chat_provider.complete(
+                messages,
+                temperature=self.settings.ai_chat_temperature,
+                max_tokens=self.settings.ai_chat_max_tokens,
+            )
+
+        executor = ToolExecutor(
+            self.db, self.settings, principal.trainer_id, principal.user_id
+        )
+        working_messages = list(messages)
+
+        for _ in range(max_rounds):
+            result = await self.chat_provider.complete_with_tools(
+                working_messages,
+                TRAINER_TOOLS,
+                temperature=self.settings.ai_chat_temperature,
+                max_tokens=self.settings.ai_chat_max_tokens,
+            )
+            tool_calls = result.get("tool_calls")
+            content = result.get("content")
+
+            if not tool_calls:
+                return content or "Done."
+
+            assistant_msg: dict[str, Any] = {"role": "assistant"}
+            if content:
+                assistant_msg["content"] = content
+            assistant_msg["tool_calls"] = tool_calls
+            working_messages.append(assistant_msg)
+
+            for tc in tool_calls:
+                fn = tc["function"]
+                name = fn["name"]
+                try:
+                    args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                log.info("ai_tool_call", tool=name, args=args, user_id=principal.user_id)
+                tool_result = executor.execute(name, args)
+                working_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "_tool_name": name,
+                    "content": tool_result,
+                })
+
+        return content or "I've completed the actions. Let me know if you need anything else."
 
     def _resolve_conversation(
         self, principal: Principal, conversation_id: str | None

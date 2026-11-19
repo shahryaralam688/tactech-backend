@@ -80,6 +80,18 @@ class _ChatProviderAdapter:
     async def complete(self, messages: list[dict[str, Any]], *, temperature: float, max_tokens: int) -> str:
         return await self.inner.complete(messages, temperature=temperature, max_tokens=max_tokens)
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict[str, Any]:
+        return await self.inner.complete_with_tools(
+            messages, tools, temperature=temperature, max_tokens=max_tokens
+        )
+
     async def stream(
         self, messages: list[dict[str, Any]], *, temperature: float, max_tokens: int
     ) -> AsyncIterator[str]:

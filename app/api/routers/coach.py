@@ -7,6 +7,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 
+from sqlalchemy.orm import Session
+
 from app.ai.capabilities import AiCapabilitiesOut, build_capabilities
 from app.ai.gateway import AiGateway
 from app.api.deps import (
@@ -22,6 +24,8 @@ from app.api.deps import (
     require_ai_access,
     require_trainee,
 )
+from app.db import models
+from app.db.session import get_db
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.security import decode_token
@@ -53,6 +57,17 @@ class GenerateProgramRequest(APIModel):
 class WeeklySummaryOut(APIModel):
     summary: str
     log_count: int = 0
+
+
+class FormCuesRequest(APIModel):
+    exercise_ids: list[str] | None = None
+    plan_id: str | None = None
+
+
+class ExerciseCuesOut(APIModel):
+    exercise_id: str
+    exercise_name: str
+    cues: list[str]
 
 # In-memory WebRTC signaling rooms (single-process). Use Redis pub/sub for multi-worker later.
 _rtc_rooms: dict[str, set[WebSocket]] = {}
@@ -97,6 +112,78 @@ async def weekly_summary(
     """Free: uses same chat quota as /coach/chat. Advanced/Pro: unlimited via entitlement."""
     raw = await service.weekly_summary(principal)
     return WeeklySummaryOut(summary=raw["summary"], log_count=raw["logCount"])
+
+
+@router.post("/exercises/form-cues", response_model=list[ExerciseCuesOut])
+async def generate_form_cues(
+    payload: FormCuesRequest,
+    principal: Annotated[Principal, Depends(require_ai_access)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ExerciseCuesOut]:
+    """Generate 3-5 AI coaching cues per exercise."""
+    from sqlalchemy import select
+
+    exercise_ids: list[str] = []
+    if payload.plan_id:
+        rows = db.execute(
+            select(models.PlanExercise.exercise_id)
+            .join(models.PlanDay, models.PlanExercise.plan_day_id == models.PlanDay.id)
+            .where(models.PlanDay.plan_id == payload.plan_id)
+        ).scalars().all()
+        exercise_ids = list(set(rows))
+    if payload.exercise_ids:
+        exercise_ids = list(set(exercise_ids) | set(payload.exercise_ids))
+    if not exercise_ids:
+        raise AppError("Provide exercise_ids or plan_id.", status_code=422, code="VALIDATION_ERROR")
+
+    exercises = db.execute(
+        select(models.Exercise).where(models.Exercise.id.in_(exercise_ids))
+    ).scalars().all()
+    if not exercises:
+        raise AppError("No exercises found.", status_code=404, code="NOT_FOUND")
+
+    names_csv = ", ".join(e.name for e in exercises)
+    prompt = (
+        "For each exercise listed below, generate 3-5 form coaching cues. "
+        "Each cue must be one short sentence (max 12 words) describing a specific "
+        "body position, breathing pattern, or movement quality. "
+        "Tone: professional, conservative, like a certified personal trainer speaking quietly. "
+        "Do not use motivational language or exclamation marks.\n\n"
+        "Return ONLY a JSON object mapping exercise name to an array of cue strings.\n\n"
+        f"Exercises: {names_csv}"
+    )
+
+    gateway = AiGateway(settings)
+    raw = await gateway.complete_text(
+        [{"role": "user", "content": prompt}],
+        temperature=0.4,
+        max_tokens=1200,
+        response_json=True,
+    )
+
+    try:
+        cues_map: dict[str, list[str]] = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        cues_map = {}
+
+    results: list[ExerciseCuesOut] = []
+    for ex in exercises:
+        ex_cues = cues_map.get(ex.name, [])
+        if not ex_cues:
+            for key, val in cues_map.items():
+                if key.lower() == ex.name.lower():
+                    ex_cues = val
+                    break
+        if ex_cues and isinstance(ex_cues, list):
+            ex.cues = ex_cues
+        results.append(ExerciseCuesOut(
+            exercise_id=ex.id,
+            exercise_name=ex.name,
+            cues=ex_cues if isinstance(ex_cues, list) else [],
+        ))
+    db.commit()
+    return results
 
 
 @router.post("/vision/pose")
