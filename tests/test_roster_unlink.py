@@ -53,6 +53,20 @@ def actors(client: TestClient) -> dict:
     }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _restore_jordan_after_module():
+    """Restore trainee-jordan's trainer_id to trainer-maya after the whole module runs."""
+    yield
+    db = SessionLocal()
+    try:
+        trainee = db.get(models.TraineeProfile, "trainee-jordan")
+        if trainee is not None and trainee.trainer_id != "trainer-maya":
+            trainee.trainer_id = "trainer-maya"
+            db.commit()
+    finally:
+        db.close()
+
+
 def _roster_ids(roster_json: list) -> set[str]:
     return {t["id"] for t in roster_json}
 
